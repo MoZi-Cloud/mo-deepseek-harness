@@ -288,6 +288,7 @@ Evidence Lock 应直接钉期望值，不留开放问题。
 这是本轮最值得新增的统一原则：
 
 > **Visibility is a separate commit.**
+>
 > Learned artifact 写入完成不等于对模型生效；只有通过 authority/policy gate 后，Host 才能发布/切换模型可见状态。
 
 它统一 Memory 与 Skill：
