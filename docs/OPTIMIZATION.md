@@ -1,7 +1,9 @@
 # DSH（mo-deepseek-harness）提示词与上下文优化方案
 
 > 基于对 fork 源码（上游 deepseek-ai 官方 DSH 0.1.2-alpha.1，commit `cd5ef81`）的全量分析。
+>
 > 目标：① 总结提示词规则 ② 评估可简化空间 ③ 改进上下文压缩 ④ 提速 ⑤ 让纯 CPU 电脑可运行。
+>
 > 所有文件引用均可点击定位；配置示例均已对照源码中的 Schema 定义核实。
 
 ---
@@ -21,8 +23,7 @@
 
 ### 1.1 没有单体 system prompt —— 装配式分区注册表
 
-系统提示词由 `SystemPrompt.assemble()` 按每次模型调用动态装配：
-`packages/core/system-prompt/src/index.ts:518`（合并全局层+作用域层 → 按 `order` 排序 → 应用 `toolOrder` → 渲染 `{{变量}}`）。
+系统提示词由 `SystemPrompt.assemble()` 按每次模型调用动态装配：`packages/core/system-prompt/src/index.ts:518`（合并全局层+作用域层 → 按 `order` 排序 → 应用 `toolOrder` → 渲染 `{{变量}}`）。
 
 固定分区次序（`FIRST_PARTY_SECTION_ORDER`，同文件 130–161 行）：
 
@@ -54,8 +55,7 @@ HARNESS_IDENTITY(-1000) → HARNESS_SOURCE(-900) → WEB_SURFACE(-800)
 
 ### 1.3 每步动态注入（进入消息历史而非 system prompt)
 
-装配顺序（`packages/core/agent-loop/src/agent.ts:232` `preStep()`）：
-**用户消息批 → AGENTS.md 工作区上下文 → runtime-context 快照 → time-context**。
+装配顺序（`packages/core/agent-loop/src/agent.ts:232` `preStep()`）：**用户消息批 → AGENTS.md 工作区上下文 → runtime-context 快照 → time-context**。
 
 - **AGENTS.md**：`packages/context/agent-instructions/src/files.ts` 发现 `$DSH_HOME/AGENTS.md`（全局）+ 根→cwd 的 `AGENTS.md`/`CLAUDE.md`，包 `<system-reminder>` 注入；预算 `maxBytes: 65536`（默认 64 KB，可在配置调小）。
 - **runtime-context 快照**：沙箱策略/审批策略/委托关系渲染成一条 user 消息，**替换式**——只保留最新一条（`packages/core/agent-loop/src/runtime-context.ts` 的 `RuntimeContextProjection` 追踪 retained 快照，旧快照被顶掉）。这部分设计很省上下文。

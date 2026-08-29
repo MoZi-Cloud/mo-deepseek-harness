@@ -4,9 +4,15 @@
     ".agents/notes/implemented/AGENTS.md",
     ".agents/notes/implemented/CLAUDE.md",
     "docs/AGENTS.md",
+    "docs/DSH借鉴hermes-开发记忆提炼-自我进化机制.md",
+    "docs/OPTIMIZATION.md",
+    "docs/advices-for-v4.md",
+    "docs/advices.md",
     "docs/cordis-api/inherited.md",
     "docs/i18n/style-samples.md",
     "docs/i18n/terminology.md",
-    "docs/i18n/translation-prompt.md"
+    "docs/i18n/translation-prompt.md",
+    "docs/mozi借鉴DSH-agent字幕模块设计.md",
+    "docs/评审报告.md"
   ]
 }

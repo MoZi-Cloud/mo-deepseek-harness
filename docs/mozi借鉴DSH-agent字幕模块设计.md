@@ -1,9 +1,13 @@
 # mozi 借鉴 DSH：agent 字幕模块设计（函数级规格 + TDD，v5 — Snapshot/Effect 协议收口）
 
 > 状态：设计备忘（working document）
+>
 > v4 → v5：吸收 `docs/advices-for-v4.md` 第二轮评审（逐条处置见 §0.3），核心为**协议收口**：Snapshot/Effect 双通道、两阶段锁 + caption_rev、renderer 注入、emit 失败语义。v4 的 CaptionProjector 事实-投影分层保留不推翻
+>
 > 主体：mozi（`/home/moyang/Documents/a88/mozi-hermes-agent/`，Hermes 系 Python agent）
+>
 > 借鉴对象：deepseek-harness（DSH，all-plugin Cordis harness，TypeScript）
+>
 > 日期：2026-08-29
 
 **v5 第一原则**：Projector 只产生当前事实 Snapshot；短暂视觉反馈是独立 Effect——Effect 不改写、也不绕过事实投影。

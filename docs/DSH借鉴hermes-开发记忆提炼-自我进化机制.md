@@ -1,8 +1,11 @@
 # DSH 借鉴 Hermes：记忆提炼与自我进化机制设计
 
 > 状态：设计备忘（working document，未纳入 docs/ 发布管线）
+>
 > 对比对象：`/home/moyang/Documents/a88/mozi-hermes-agent/`（Nous Research Hermes Agent，Python）
+>
 > 本仓：deepseek-harness（DSH，all-plugin Cordis harness，TypeScript）
+>
 > 日期：2026-08-29
 
 ## 0. 摘要
