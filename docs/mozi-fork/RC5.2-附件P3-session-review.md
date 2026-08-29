@@ -1,8 +1,8 @@
-# RC5.1 附件 P3 — Session review（函数级规格）
+# RC5.2 附件 P3 — Session review（函数级规格）
 
-> 上位：`RC5.1-函数级规格总纲.md`；架构依据 `自我进化机制-RC5.1-方案.md` §4/§5.1–5.4。
+> 上位：`RC5.2-函数级规格总纲.md`；架构依据 `自我进化机制-RC5.2-方案.md`。
 >
-> 包：`packages/review/session-review`（`@deepseek-ai/dsh-session-review`）；P3 同时抽出 `packages/skill/skill-authoring`（`SkillAuthoringService`，thin 化 tool-skill-manage）并落地 session-query 检索默认过滤（独立 Retrieval Track 前置）。
+> 包：`packages/review/session-review`；P3 同时抽出 `packages/skill/skill-authoring` 并落地 session-query 默认过滤（Retrieval Track 前置）。
 >
 > 前置：P1、P2 全绿。日期：2026-08-29
 
@@ -10,89 +10,73 @@
 
 ```text
 packages/review/session-review/
-  src/index.ts        # 函数插件：触发器装配（Config.triggerMode）
-  src/types.ts        # LearningView/ReviewInput/ReviewPlan/ReviewCursor/错误类型
-  src/learning-view.ts# 纯函数：eventAdmissible/projectEvents/estimateTokens
-  src/plan-schema.ts  # ReviewPlanSchema（zod）+ OUTPUT_SCHEMA（JSON Schema 常量）
-  src/cursor.ts       # ReviewCursorStore（storageDomain 原子 claim/advance）
-  src/ledger.ts       # ReviewLedgerStore（checkpoint/opStates）
-  src/admissibility.ts# 纯函数：checkEvidenceAdmissibility
-  src/runtime.ts      # ReviewRuntime（编排）
+  src/index.ts         # 触发器装配（Config.triggerMode + foreground 抢占）
+  src/types.ts         # LearningView/ReviewInput/ReviewPlan/Cursor/Checkpoint/错误
+  src/learning-view.ts # eventKindAdmissible / projectEvents（turn fold）/ estimateTokens（纯）
+  src/plan-schema.ts   # ReviewPlanSchema（zod）+ OUTPUT_SCHEMA（JSON Schema 常量）
+  src/cursor.ts        # ReviewCursorStore
+  src/ledger.ts        # ReviewLedgerStore（含 planned 边界持久化）
+  src/admissibility.ts # checkEvidenceAdmissibility（纯）
+  src/runtime.ts       # ReviewRuntime
+packages/skill/skill-authoring/   # SkillAuthoringService（自 tool-skill-manage 抽出）
 tests/*.spec.ts
 ```
 
-## 2. 类型契约（承 RC5.1 §2 数据模型）
+## 2. 纯函数规格
 
-`ReviewCursor`、`ReviewInput`、`ReviewPlan`、`ReviewCheckpoint` 形状照方案 §2；`LearningView = { range: {fromExclusive, throughInclusive}, events: ReadonlyArray<SessionEvent>, estTokens }`。
+#### `eventKindAdmissible(event: SessionEvent): boolean`
+- 职责：只判类型/source（单 event 可判定的一切）。允许：direct-human `user/message`、`tool/call`、`tool/result`（含 error）、`user/message` source `skill-invocation`。排除：`skill-catalog`/`memory`/其余 plugin 合成消息、`assistant/message`（final 由 range fold 推导，见下）、`interrupted:true` 的 step。
+- 验收：`kind-admit-human-tool-invocation`、`kind-exclude-synthetic`、`kind-exclude-assistant-deferred-to-fold`。
 
-## 3. 纯函数规格
-
-#### `eventAdmissible(event: SessionEvent): boolean`
-- 职责：LearningView 证据过滤（确定性、可重放）。允许：direct-human `user/message`（source 非 plugin）、`tool/result`（含 error）、`assistant/message`（仅 final，作 context）、`user/message` source `skill-invocation`（用户手势）。排除：`source.kind==='skill-catalog'`、`'memory'`、compaction 合成面、其余 plugin 注入（[评审 S1-7] feedback 永不入；[核验] synthetic 可按 source 判别）。
-- 验收：`admit-human-user-message`、`admit-tool-result-and-error`、`exclude-memory-catalog-synthetic`、`exclude-plugin-injected`、`deterministic-same-input-same-output`。
-
-#### `projectEvents(events, range, config): LearningView`
-- 职责：按 `(fromExclusive, throughInclusive]` 切 raw log（seq 稳定，`types.ts:357-366`），`eventAdmissible` 过滤，超 `maxLearningViewTokens` 截窗（保留靠近 through 侧，截窗在投影中显式记录）。
-- 验收：`project-range-bounds-respected`、`project-budget-truncates-from-old-side`、`project-compaction-invariant`（同 raw range 在 compaction/resume 前后同投影同 seq——P0 T17 关联）、`project-empty-range-empty-view`。
-
-#### `estimateTokens(view): number`
-- 职责：确定性 token/字符估算（启动前预算闸输入）。验收：`estimate-monotone-in-size`、`estimate-deterministic`。
+#### `projectEvents(events, range, config): { view: LearningView, effectiveThrough: number, contextOnly?: LearningView }`
+- 职责：raw log 按 `(fromExclusive, throughInclusive]` 切片 → **oldest-first 连续分片**至预算内，`effectiveThrough` = 实际纳入的最后 seq；超出预算的最近尾部作为 `contextOnly`（禁止 evidence 引用、不参与 high-water）；**turn fold 推导每 turn 的 final assistant outcome**（`types.ts:262` 无 final 标志：末个未中断 assistant step；`interrupted:true` 排除）。
+- 验收：`project-oldest-first-contiguous`（T28 关联）、`project-effective-through-stops-at-budget`、`project-contextonly-not-citable`、`project-turn-fold-final-only`（多 step 工具循环只留末条 outcome）、`project-interrupted-excluded`、`project-compaction-invariant`（T17 关联）。
 
 #### `checkEvidenceAdmissibility(plan, events): AdmissibilityReport`
-- 职责：原则 7 的 host 端实现——每条 proposal 的 `evidence[]`：seq 存在于 range、`span` 子串确实存在于该事件文本（explicit-user 要求 extractive 级，否则降级 `inference` → L1 下转 shadow/draft）；`observed-project` 须引用 tool outcome。`confidence` 不参与判定（仅透传落 ledger 遥测）。
-- 验收：`admissible-span-present-passes`、`forged-span-rejects`（seq 对但 span 不在文本——**核心防伪**）、`abstract-content-downgraded-to-inference`、`observed-requires-tool-outcome`、`missing-evidence-rejects`。
+- 职责：每 proposal 的 `evidence[{seq, span?}]`——seq 在 range 内、span 子串确实存在于该事件文本；`explicit-user` 须引用 direct-human 消息且内容 extractive 级；`observed-project` 须引用 tool outcome；抽象/归纳自动降级 inference（L1 下转 shadow/draft）。`confidence` 仅遥测。
+- 验收：`span-present-passes`、`forged-span-rejects`、`abstract-downgraded-to-inference`、`observed-requires-tool-outcome`、`missing-evidence-rejects`、`current-state-not-citable`。
 
-## 4. 存储规格
+## 3. 存储规格
 
 #### `class ReviewCursorStore`
-- `claim(sessionId, desiredThrough): Promise<Claim>` — `storageDomain.update` 原子：无 inFlight 且 `desiredThrough > reviewedThroughSeq` 时置 `inFlight{reviewId, fromExclusive=reviewedThroughSeq, throughInclusive=desiredThrough, status:'planning'}`；已有 inFlight → 返回现有（at-least-once 下并发派发合一）。
-- `advance(reviewId, throughInclusive): Promise<void>` — 校验 inFlight 匹配后推进 `reviewedThroughSeq` 并清 inFlight。
-- `recover(sessionId)` — 启动时发现未闭环 inFlight → 触发 reconcile（§5 saga 步骤 10-13）。
-- 验收：`claim-serializes-overlapping-dues`（T-80..100 与 80..120 归并为单 range 或排队）、`claim-rejects-nonmonotonic`、`advance-advances-high-water`、`policy-version-change-keeps-high-water`、`recover-resumes-unfinished`。
+- `claim(sessionId, desiredThrough): Promise<ClaimResult>` — 单原子 `update`：`desiredThroughSeq = max(old, incoming)` 永不丢 due；`inFlight` 缺席 → 置入并返回 `{kind:'acquired', range:(reviewedThrough, desiredThrough]}`；在飞 → `{kind:'busy', inFlight}`；无 due → `{kind:'nothing-due'}`。busy caller **不 spawn**（[核验 S1-8]）。
+- `advance(reviewId, effectiveThrough)` — 只推进实审连续区间；`completeInFlight(reviewId)`。
+- `recover(sessionId)` — 未闭环 inFlight 恢复。
+- 验收：`claim-acquired-busy-nothing-due`（T29）、`claim-desired-through-max`、`advance-only-effective-through`、`recover-resumes`。
 
 #### `class ReviewLedgerStore`
-- `putCheckpoint / getCheckpoint / markOpState(reviewId, opId, state)` — 全经 `storageDomain.update`。
-- 验收：`ledger-checkpoint-roundtrip`、`ledger-op-state-idempotent-mark`。
+- `putCheckpoint(c)` / `markPlanned(reviewId, plan, planDigest, baseRevisions)` — **planned durable 边界**：validated canonical plan 整体持久化（[核验 S1-9]）；`markOpState` / `markFailed(code, {attemptCount, nextRetryAt?})`。
+- 验收：`planned-boundary-persists-plan`、`recover-from-planned-never-recalls-model`、`recover-from-planning-allows-replan`、`op-state-idempotent-mark`。
 
-## 5. ReviewRuntime（编排类）
+## 4. ReviewRuntime（编排）
 
-#### `maybeDispatch(agent: Agent): void`
-- 职责：resume-async / maintenance 入口（`session/event` 观察 `turn/end` 标 due → 去抖 → `runMaintenance` claim，busy 保留 due；`runtime-types.ts:102-110`）。fire-and-forget；**绝不 mid-turn 碰模型可见历史**（发布只在下一 pre-step，[核验 S2-1]）。
-- 验收：`async-dispatch-no-mid-turn-append`、`maintenance-busy-keeps-due`。
+#### `maybeDispatch(agent)` / `onForegroundTurn(agent)`
+- 前者：resume-async / maintenance 派发（fire-and-forget；maintenance 经 `runMaintenance` claim，busy 保留 due）。
+- 后者：**foreground 抢占**——每 Agent 至多一个后台 review run；新 foreground turn 开始时 `run.dispose()` 并有限等待 acknowledgement，超时立即放行；取消 ≠ 失败：cursor inFlight 保留、之后 recover 重放安全（[核验 S2-5]；`SubagentRun.dispose`，`types.ts:289`）。
+- 验收：`async-dispatch-no-mid-turn-append`、`foreground-preempts-background`、`cancellation-preserves-cursor`、`maintenance-busy-keeps-due`。
 
-#### `async ensureReviewThrough(agent: Agent, seq: number): Promise<void>`
-- 职责：resume-blocking 闸体——`agent/pre-step` 内 `claim → runReview → await → next()`（pre-step 为 awaited waterfall，`runtime-types.ts` 'agent/pre-step'）。
-- 验收：`blocking-review-completes-before-first-request`、`blocking-failure-still-calls-next`（复盘失败不阻塞用户请求，落 ledger failed）。
+#### `async ensureReviewThrough(agent, seq): Promise<void>`
+`pre-step` 闸体：claim → runReview → await → `next()`；失败不阻塞用户请求（落 ledger failed）。
+- 验收：`blocking-completes-before-first-request`（T30）、`blocking-failure-still-calls-next`。
 
-#### `async runReview(cursor): Promise<void>`（十三步 saga，方案 §4）
-编排：`buildLearningView` → `estimateTokens` 预算闸（超 → `planner_terminal_failure`-类不启动记录）→ `startPlanner` → `gateResult` → `checkEvidenceAdmissibility` → 重读权威状态 + stale 检查 → 分配 opId → commit（memory 经 `ctx.memory.applyOps`；skills 经 `SkillAuthoringService.commitPlanOps`）→ `markOpState` → `advance`。
-- 验收：`saga-happy-path-commits-all`、`saga-crash-gap-no-duplicate`（commit 后 ledger 未 mark 重启 → appliedOps/reconciliation 去重）、`saga-skill-reconciliation-paths`（目标缺失执行/digest 相同补账/digest 不同 conflict）、`saga-old-review-cannot-overwrite-new`（游标乱序防护）、`saga-budget-prestart-no-spawn`、`saga-partial-plan-commits-admissible-only`。
+#### `async runReview(cursor): Promise<void>`（十三步 + 修订）
+- claim → LearningView（连续切片，effectiveThrough）→ ReviewInput（**含 currentMemory/writableSkills 当前状态**；state 不可作 evidence 引用）→ 预算启动闸 → `startPlanner`（patch 走**两阶段**：planner-1 选 `patchTarget(skillId)` → host 经 provider 读精确 revision bundle → planner-2 于精确内容上出 replacement——[核验 S1-10]）→ `gateResult` → admissibility → **whole-plan preflight 全有或全无**（任一 proposal 不可 admissible/冲突/超预算 → 整 plan 不 commit，原因落 ledger，[核验 S1-11]）→ 重读权威状态 stale 检查 → host 分配 opId → 逐资源 commit（memory `applyOps`；skills 经 `SkillAuthoringService`）→ `markOpState` → `advance(effectiveThrough)` → 释放 inFlight。
 
-#### `startPlanner(input: ReviewInput, config): Promise<SubagentRun>`
-- 职责：`ctx.subagents.start(config.reviewProvider ?? 'spawn', { parent, label:'self-review', prompt: render(input), persona: REVIEW_PERSONA, toolFilter:{allow:[]}, outputSchema: OUTPUT_SCHEMA, agentOptions:{ model: config.reviewModel? } })`（契约：`subagent/src/index.ts:552`；spawn `inheritsParentContext=false` :50）。
-- 验收：`planner-request-shape-pinned`（request 字段 snapshot——P0 T02/T12 关联）、`planner-route-fallback-default-spawn`。
+失败分类（[核验 S2-7]）：proposal 拒绝类（threat/conflict/unadmissible）→ 记录不重试同 plan；`stale_base_revision` → 限次 replan（Config）；transient → backoff 重试；foreground 取消 → 不计失败；超限 → `failed-terminal` 需显式 re-review。
+- 验收：`saga-happy-path`、`saga-whole-plan-preflight-no-partial`、`saga-planned-boundary-recovers-without-model`、`saga-crash-gap-resource-idempotent`、`saga-stale-replan-bounded`、`saga-two-phase-patch-uses-exact-content`、`saga-range-never-skips`。
 
-#### `gateResult(result: SubagentResult): ReviewPlan`
-- 职责：`stopReason==='completed'` 且 `structured !== undefined` 且 `ReviewPlanSchema.parse` 通过；否则 `planner_terminal_failure` 落 ledger，零 mutation（`types.ts:236-252`）。
-- 验收：`gate-aborted-zero-mutation`、`gate-max-tokens-zero-mutation`、`gate-invalid-structured-zero-mutation`、`gate-valid-parses`。
+#### `startPlanner(input, config): Promise<SubagentRun>` / `gateResult(result): ReviewPlan`
+`agentOptions` 携带 `{ model: config.reviewModel?, maxTokens: config.maxReviewOutputTokens }`（[核验 S2-8] 真接线）；`maxReviewTotalTokens` 由 usage 累计超限 `run.dispose()`。gate：`stopReason==='completed'` + `structured` + `ReviewPlanSchema.parse`（[核验 S1-9]）。
+- 验收：`planner-request-shape-pinned`、`output-tokens-wired`、`gate-terminal-zero-mutation`。
 
-#### `buildReviewInput(view, memoryState, writableSkills): ReviewInput`
-- 职责：拼 Evidence + Current state（严格分区：current state 可用于 dedupe/patch 目标解析，不可作 evidence 引用——admissibility 拒绝引用 current state 的 seq）。
-- 验收：`input-carries-current-memory-revision`、`input-current-state-not-citable-as-evidence`、`input-writable-skills-lists-agent-owned-only`。
+## 5. SkillAuthoringService 抽出（P3）
 
-## 6. 触发装配与 Config
+`SkillAuthoringService extends Service`（`super(ctx,'skillAuthoring')`）：承接 AuthoringCore + ManagedSkillProvider，新增 `commitPlanOps(skillOps)` 与 `transitionManagedSkill/markStale/archive/revive`（单 record CAS + invalidate，[核验 S1-14]）；tool-skill-manage 与 session-review 为两个 thin consumer。验收：`service-parity-two-consumers`、`tool-thin-after-extraction`、`provider-moved-with-service`。
 
-`Config.triggerMode: 'resume-async'（默认）| 'resume-blocking' | 'maintenance'`；`reviewProvider`（默认 'spawn'）、`reviewModel?`、`maxLearningViewTokens/maxReviewTotalTokens/maxReviewOutputTokens`、`debounceMs`、`policyVersion`、`learningViewVersion`、`persona`（静态文本，snapshot 钉死）、`rolloutLevel: 'shadow'|'conservative'|'autonomous'`（默认 'shadow'；shadow 下 saga 第 10 步零 mutation，proposal 全落 ledger）。
+## 6. session-query 默认过滤（Retrieval Track 前置，上游包 fork 修改）
 
-## 7. SkillAuthoringService 抽出 + session-query 默认过滤
+`tool-session-query` 请求未显式 `includeChildSessions: true` 时默认附加 `{kind:'parent', values:[null]}`（`session-query/src/types.ts:198`）；`ctx.sessionQuery` 服务不改。验收：`tool-default-root-only`、`tool-explicit-optin`、`host-unfiltered`。
 
-- `skill-authoring`：`SkillAuthoringService extends Service`（`super(ctx,'skillAuthoring')`）承接 tool-skill-manage 的 AuthoringCore；新增 `commitPlanOps(ops): Promise<OpResults>`（create-draft/patch-draft 批量、逐 op CAS + reconciliation）；tool-skill-manage 改为 thin consumer。验收：`service-two-consumers-parity`（工具与 review 同 API 同错误码）、`tool-thin-after-extraction`。
-- `tool-session-query`（上游包 fork 修改）：请求未显式带 `includeChildSessions: true` 时默认附加 `{kind:'parent', values:[null]}`（服务层既有 filter 类型，`session-query/src/types.ts:198`）；Host 层 `ctx.sessionQuery` 不改。验收：`tool-default-root-only`、`tool-explicit-children-optin`、`host-capability-unfiltered`。
+## 7. 验收门（Phase 出口）
 
-## 8. 验收门（Phase 出口）
-
-- 附件全部验收绿 + 100% 覆盖（纯函数为主力；Runtime 以 fake planner/假 subagent 驱动状态机，REAL boot 另测）；
-- REAL boot：完整链路（真实 Loader 组合 + mock 模型双角色：主 agent 与 review child）——含 resume-blocking 首请求顺序断言；
-- snapshot：review child 终请求快照（P0 T02 产品化复验）、`<assistant-maintained-memory>` 围栏、persona 文本；
-- session-query 默认过滤落地 + Retrieval Track 独立文档说明；
-- 双 SDK（若有类型面变更）、doc-sync、Agent Note；已知限制登记：planner 继承父 standing prompt 环境（persona+prompt 收窄，[核验 §六]）。
+附件测试全绿 + 100% 覆盖；REAL boot 全链（双 mock 模型：主 agent + review child；含 blocking 顺序、抢占恢复、planned-boundary 崩溃恢复）；snapshot（child 终请求逐字节、persona、ReviewPlan schema 拒绝文案）；doc-sync + Agent Note + 双 SDK（如类型面变更）；Known Limitations：child 继承父 standing prompt 环境（persona/prompt 收窄，非纯净）。

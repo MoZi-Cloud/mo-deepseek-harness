@@ -1,19 +1,19 @@
-# RC5.1 附件 P4 — Skill curator（函数级规格）
+# RC5.2 附件 P4 — Skill curator（函数级规格）
 
-> 上位：`RC5.1-函数级规格总纲.md`；架构依据 `自我进化机制-RC5.1-方案.md` §5.8。
+> 上位：`RC5.2-函数级规格总纲.md`；架构依据 `自我进化机制-RC5.2-方案.md`。
 >
-> 包：`packages/skill/skill-curator`（`@deepseek-ai/dsh-skill-curator`）；写通道唯一 = `SkillAuthoringService`（P3），不另开任何文件系统写入。
+> 包：`packages/skill/skill-curator`（`@deepseek-ai/dsh-skill-curator`）；写通道唯一 = `SkillAuthoringService.transitionManagedSkill`（单 record CAS + invalidate，[核验 S1-14]——无文件移动、无半迁移状态）。
 >
 > 前置：P3 全绿。日期：2026-08-29
 
 ## 1. 模块布局
 
 ```text
-src/index.ts        # 函数插件装配：Config + runMaintenance pass 注册 + SkillUsageObserver 挂 session/event
-src/state-machine.ts# transition() 纯函数（状态机唯一家）
-src/curator.ts      # SkillCurator（编排：list → transition → 经 SkillAuthoringService apply）
-src/usage.ts        # SkillUsageObserver + usage 账本（storageDomain）
-src/metrics.ts      # aggregateOutcomes() 纯函数（P5 指标聚合，零新存储）
+src/index.ts         # 装配：自有触发器（上次运行时间 + Config 间隔）→ runMaintenance 取 idle ownership
+src/state-machine.ts # transition() 纯函数（唯一家）
+src/curator.ts       # SkillCurator
+src/usage.ts         # SkillUsageObserver（best-effort 串行队列）+ usage domain
+src/metrics.ts       # aggregateOutcomes()（P5，纯）
 tests/*.spec.ts
 ```
 
@@ -21,41 +21,45 @@ tests/*.spec.ts
 
 ```text
 CuratorConfig = { staleAfterDays, archiveAfterDays, zeroUseGraceDays,
-                  intervalHours, minIdleHours }            // 全部 required，无静默默认
+                  intervalHours, minIdleHours }        // 全部 required
 SkillUsageRecord = { skillId, modelLoads, userLoads,
                      lastModelLoadAt?, lastUserLoadAt? }
-lastMeaningfulUseAt(record) = max(lastModelLoadAt, lastUserLoadAt)
-Transition = { to: 'active'|'stale'|'archived', reason:
-               'promoted'|'went-stale'|'meaningful-use'|'went-archived'|'revived' }
+// ManagedSkillRecord 时间锚点（P2 定义，此处消费）：
+// createdAt, promotedAt?, stateChangedAt, staleAt?, archivedAt?
+Transition = { to: 'active'|'stale'|'archived',
+               reason: 'went-stale'|'meaningful-use'|'went-archived'|'revived',
+               now, staleAt? }
 ```
 
 ## 3. 函数规格
 
-#### `transition(record: OwnershipRecord, usage: SkillUsageRecord | undefined, now: number, config: CuratorConfig): Transition | undefined`
-- 职责：纯状态机——`draft` 只经显式提升（不在本函数）；`active → stale`（距 `lastMeaningfulUseAt` ≥ staleAfterDays；`use==0` 走 zeroUseGraceDays 宽限——"use=0 是证据缺失不是陈旧证据"）；`stale → active`（meaningful use）；`stale → archived`（≥ archiveAfterDays）；`archived → active` 仅显式复活。数字全部来自 Config。
-- 调用：被 SkillCurator.runPass 调用；不触碰 I/O。
-- 验收：`active-goes-stale-after-days`、`stale-archived-after-days`、`meaningful-use-revives-stale`、`zero-use-grace-delays-stale`、`boundary-day-exact`（天数边界值）、`no-transition-returns-undefined`、`draft-never-auto-transitions`。
+#### `transition(record: ManagedSkillRecord, usage: SkillUsageRecord | undefined, now, config): Transition | undefined`
+- 职责：纯状态机，锚点写死（[核验 S1-13]）：
+- active never-used：锚 = `max(promotedAt ?? createdAt, createdAt)`，超 `staleAfterDays` → stale（never-used 的宽限 = 锚本身从提升起算）；
+- active used：锚 = `lastMeaningfulUseAt`，超 `staleAfterDays` → stale；`zeroUseGraceDays` 内的零使用不转；
+- stale → active：`lastMeaningfulUseAt > stateChangedAt`（meaningful use）；
+- stale → archived：**自 `staleAt` 起** ≥ `archiveAfterDays`（二次窗口独立计时，避免 30/90 语义混淆）；
+- archived → active：仅显式 revive（不在本函数）；`pinned: true` 一律不迁移。
+- 验收：`active-stale-after-days`、`never-used-anchored-at-promotion`、`stale-archived-from-staleAt`、`meaningful-use-revives`、`zero-use-grace-window`、`pinned-never-transitions`、`boundary-exact`、`no-op-returns-undefined`。
 
-#### `class SkillUsageObserver`
-- `onSessionEvent(event: SessionEvent): void` — **精确计数**（[核验 S2-4]）：`tool/result` 且 `exec.name === 'skill'` 且 `isError === false` 且参数解析出技能名 → `modelLoads+1, lastModelLoadAt=event.time`；失败调用不计数；`user/message` 且 `source.kind === 'skill-invocation'` → `userLoads+1`。写经 `usage` domain `update`（单进程原子）。
-- 验收：`count-successful-model-load-only`、`failed-load-does-not-count`、`count-slash-invocation`、`catalog-presence-does-not-count`（出现在 prompt 不算 use）、`concurrent-observer-updates-serialize`。
+#### `class SkillUsageObserver`（best-effort，[核验 S2-9]）
+- `onSessionEvent(event): void` — 同步入队即返回（不抛、不 await）；内部单工作串行队列 drain 到 usage domain `update`；HMR dispose 时 drain 或有意丢弃并记日志。精确计数：`tool/result` 且 `exec.name==='skill'` 且 `isError===false` 且参数解析出技能名 → `modelLoads`；`source.kind==='skill-invocation'` → `userLoads`；失败/目录出现不计。
+- 语义：usage 丢失只影响 curator 质量，绝不影响 skill 正确性。
+- 验收：`count-successful-model-load-only`、`failed-load-not-counted`、`slash-invocation-counted`、`catalog-presence-not-counted`、`listener-never-throws`（存储故障注入下 session 路径不受影响）、`dispose-drains-or-drops-with-log`。
 
 #### `class SkillCurator`
-- `async runPass(signal: AbortSignal): Promise<CuratorReport>` — `runMaintenance` 槽任务体（claim-或-throws，`runtime-types.ts:102-110`；busy 由装配层保留 due 稍后重试）。流程：`listManagedSkills()`（**只**列 sidecar `owner:'agent'` 条目——领地 = 模型自治域）→ 逐条 `transition` → 有迁移则经 `SkillAuthoringService` 执行（staging/不可达根移动 + sidecar 状态，**只归档永不删除**）→ 产出 `CuratorReport { transitions[], examinedAt }` 落 ledger。
-- `listManagedSkills(): Promise<OwnershipRecord[]>` — 读 skill-ownership domain，按 `root==='project-dsh' && owner==='agent'` 过滤。
-- 验收：`pass-archives-not-deletes`（归档后文件仍在不可达根，可显式复活）、`pass-territory-zero-contact`（构造 `.agents/skills/<n>` 与 human-owned sidecar 记录，跑 pass 断言零修改——**P0 级领地测试**）、`pass-owned-only`（human-owned 条目即使最旧也不迁移）、`pass-idempotent-rerun`（连续两跑第二次零迁移）、`pass-respects-signal`（abort 中止且无半迁移状态——单迁移原子性由 SkillAuthoringService CAS 保证）、`pass-busy-throws-retried-later`。
+- `async runPass(signal: AbortSignal): Promise<CuratorReport>` — runMaintenance 槽任务体：`listManaged()`（sidecar `owner==='agent'` 全量，**领地 = 模型自治域**）→ 逐条 `transition`（含 usage/锚点）→ 迁移经 `SkillAuthoringService.transitionManagedSkill`（archive = 状态 CAS + invalidate，bundle 不可变目录原位保留——只归档永不删除）→ 报告落 ledger。
+- 触发器（措辞按 [核验 S2-9] 修正）：插件自带 session/event + 时间检查（距上次 ≥ `intervalHours`）→ 调用 `agent.runMaintenance(pass)` 取 idle ownership；busy 保留 due。
+- 验收：`pass-archives-not-deletes`（bundle 原位 + state=archived + 不出目录）、`pass-territory-zero-contact`（`.agents` 与 human-owned sidecar 零修改——P0 级持久回归）、`pass-managed-only`、`pass-idempotent-rerun`、`pass-respects-signal-no-half-state`（CAS 保证：未完成的 transition 不产生状态变化）、`pass-busy-retried`、`pinned-user-gate-unbypassable`。
 
-#### `aggregateOutcomes(range: {from,to}): EffectivenessReport`
-- 职责：纯函数（P5）——从 review-ledger 与 usage 账本聚合：proposals（按 kind/action）、committed、duplicate、rejected（按错误码）、precision 抽样输入清单、tokens。无新事件、无新存储。
-- 验收：`aggregate-tallies-match-ledger`、`aggregate-empty-range-zeros`、`aggregate-deterministic`。
+#### `aggregateOutcomes(range): EffectivenessReport`
+- 职责：纯函数——review-ledger + usage 聚合：proposals 按 kind/action、committed/duplicate/rejected（按错误码）、`review_cancelled_for_foreground`、retry/terminal 计数、memory blocked-on-publish、orphan revisions、provider conflict 率、range lag（`desiredThrough - reviewedThrough`）、tokens。
+- 验收：`aggregate-matches-ledger`、`aggregate-empty-zeros`、`aggregate-deterministic`。
 
-## 4. 装配与 Config
+## 4. Config（schemastery，required）
 
-`apply(ctx)`：`inject = ['agents','storageDomain','skillAuthoring']`；注册 `runMaintenance` 周期 pass（`intervalHours` 距上次 + `minIdleHours` 空闲阈值；上次运行时间存 curator domain 记录）+ `session/event` 观察者；HMR disposal 注销两者。
+`staleAfterDays`、`archiveAfterDays`、`zeroUseGraceDays`、`intervalHours`、`minIdleHours`。
 
 ## 5. 验收门（Phase 出口）
 
-- 附件全部验收绿 + 100% 覆盖（状态机与观察者全决策表；Curator 编排以 fake AuthoringService 驱动）；
-- REAL boot：curator + skill-authoring + skill-filesystem 全组合，归档→复活→active 全链；
-- 领地测试进 REAL 场景（`.agents` 零接触为持久回归用例）；
-- README（Known Limitations：LLM 整合未实现、仅 project 自治域、P5 指标经 aggregateOutcomes 供外部面板）+ Agent Note；doc-sync。
+附件测试全绿 + 100% 覆盖（状态机全迁移路径 + 观察者故障注入）；REAL boot：curator + skill-authoring + managed provider 全组合（归档→复活→active 全链 + 领地零接触持久回归）；README（Known Limitations：LLM consolidation 未实现且默认关、仅 project 自治域、usage 为 best-effort）+ Agent Note；doc-sync。
