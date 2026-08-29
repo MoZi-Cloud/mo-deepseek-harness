@@ -2,7 +2,7 @@
 
 > 状态：设计备忘（working document）
 >
-> v4 → v5：吸收 `docs/advices-for-v4.md` 第二轮评审（逐条处置见 §0.3），核心为**协议收口**：Snapshot/Effect 双通道、两阶段锁 + caption_rev、renderer 注入、emit 失败语义。v4 的 CaptionProjector 事实-投影分层保留不推翻
+> v4 → v5：吸收 `docs/mozi-fork/advices-for-v4.md` 第二轮评审（逐条处置见 §0.3），核心为**协议收口**：Snapshot/Effect 双通道、两阶段锁 + caption_rev、renderer 注入、emit 失败语义。v4 的 CaptionProjector 事实-投影分层保留不推翻
 >
 > 主体：mozi（`/home/moyang/Documents/a88/mozi-hermes-agent/`，Hermes 系 Python agent）
 >
@@ -28,11 +28,11 @@
 8. **主循环事件与回合同线程**（`conversation_loop.py` 内同步发射 thinking/reasoning/流式回调）——这类事件不存在跨回合迟到问题；可迟到的只有工具工作线程发射的 `tool.*`（中断路径下）。
 9. pet 的现行瞬态语义：CLI `_derive_pet_state` 中 `_pet_event` **瞬态 flash 优先于一切推导态**（含 awaiting）——effect 政策 §3.6 与此对齐。
 
-### 0.2 第一轮评审处置摘要（v4 ← `docs/advices.md`，全表见 git 历史 v4 版）
+### 0.2 第一轮评审处置摘要（v4 ← `docs/mozi-fork/advices.md`，全表见 git 历史 v4 版）
 
 S0 级五项全部采纳（补 `tool_call_id` kwargs、事实/显示分离、CLI/网关共用 projector、State/Frame 拆分、并发串行化）；处方修正四处（队列→锁、server 定时器→自衰减、中央脱敏层→条件触发、parity 豁免→提案待批）。
 
-### 0.3 v5 对 `docs/advices-for-v4.md` 的逐条处置
+### 0.3 v5 对 `docs/mozi-fork/advices-for-v4.md` 的逐条处置
 
 判定含义：**采纳**=按建议执行；**修正采纳**=诊断成立、处方需改；**部分采纳**=只取一部分。
 

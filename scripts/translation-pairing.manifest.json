@@ -4,15 +4,16 @@
     ".agents/notes/implemented/AGENTS.md",
     ".agents/notes/implemented/CLAUDE.md",
     "docs/AGENTS.md",
-    "docs/DSH借鉴hermes-开发记忆提炼-自我进化机制.md",
-    "docs/OPTIMIZATION.md",
-    "docs/advices-for-v4.md",
-    "docs/advices.md",
     "docs/cordis-api/inherited.md",
     "docs/i18n/style-samples.md",
     "docs/i18n/terminology.md",
     "docs/i18n/translation-prompt.md",
-    "docs/mozi借鉴DSH-agent字幕模块设计.md",
-    "docs/评审报告.md"
+    "docs/mozi-fork/DSH借鉴hermes-开发记忆提炼-自我进化机制.md",
+    "docs/mozi-fork/OPTIMIZATION.md",
+    "docs/mozi-fork/advices-for-v4.md",
+    "docs/mozi-fork/advices.md",
+    "docs/mozi-fork/mozi借鉴DSH-agent字幕模块设计.md",
+    "docs/mozi-fork/评审报告.md",
+    "docs/mozi-fork/自我进化机制-RC4-全插件方案.md"
   ]
 }
