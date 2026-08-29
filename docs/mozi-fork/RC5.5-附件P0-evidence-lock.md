@@ -1,14 +1,14 @@
-# RC5.5 附件 P0 — Evidence Lock（行为事实钉死，61 活跃 + 2 历史回归）
+# RC5.5 附件 P0 — Evidence Lock（行为事实钉死，68 活跃 + 2 历史回归）
 
 > 上位：`RC5.5-函数级规格总纲.md`。P0 = **zero behavior change**（允许测试与未来包骨架，不注册生产行为、不改 shipped composition）。
 >
 > 测试落位：`packages/review/session-review/tests/evidence-lock/*.spec.ts`（本阶段创建该包骨架）。
 >
-> 相对 RC5.3-P0：T36 期望值改写（S2-6）；T41 改 live 事件（S1-6）；新增 T42–T53（第六轮处置 §4）。相对 RC5.4-P0：T33/T49/T52 期望值随第七轮修订；新增 T54–T61（第七轮处置 §4：定位传递/幂等/可见谱系/pending 四字段/ack 分组/effectiveThrough 六项协议缺口）。
+> 相对 RC5.3-P0：T36 期望值改写（S2-6）；T41 改 live 事件（S1-6）；新增 T42–T53（第六轮处置 §4）。相对 RC5.4-P0：T33/T49/T52 期望值随第七轮修订；新增 T54–T61（第七轮处置 §4）。相对 RC5.5-P0：新增 T62–T68（第八轮处置 §3：opId 派生、create 幂等、skill receipt 对称、applied-only ack、finalization 幂等、disposition 门控 advance）。
 >
-> 日期：2026-08-29
+> 日期：2026-08-29（RC5.5.1 增补 2026-08-30）
 
-## 1. 测试矩阵（T01–T41 承前修订，T42–T53 第六轮新增，T54–T61 第七轮新增）
+## 1. 测试矩阵（T01–T41 承前修订，T42–T53 第六轮新增，T54–T61 第七轮新增，T62–T68 第八轮新增）
 
 | # | 测试 | 钉死事实 | 通过标准 |
 |---|---|---|---|
@@ -68,11 +68,18 @@
 | **T54** | `stale-skill-remains-discoverable` | provider 可见谱系 = `active \| stale`（S1-3）；tool list→get 对 stale 可达 | stale 出 catalog 且 skill 工具可载入；载入产 meaningful use → curator 复活 active；draft/rejected/archived 仍不可达 |
 | **T55** | `op-derived-revision-path-exclusive` | `ManagedRevisionId = hash(skillId, requestedByOpId)`（S1-2） | 并发两 op 写互不重叠的 revision 目录；record CAS 决胜；败者 revision 计 orphan；无文件穿插污染 |
 | **T56** | `partial-bundle-crash-retry-completes` | 完成标记协议（S1-2 修正一；fs 无 move/delete，T25） | crash 于部分写入后：重放同 op 全量重写补全 + 补标记，成功非 corruption；标记在而 digest 异（异物路径）→ `invalid_structure` fail-loud |
-| **T57** | `skill-op-retry-duplicate-before-stale` | `lastAppliedOpId` 资源 receipt（S1-2） | bundle+CAS 成功、ledger mark 前 crash → 重放同 op 命中 receipt 返回已落结果，不报 `stale_base_revision`（与 memory `applyops-duplicate-before-stale` 同型） |
+| **T57** | `skill-op-retry-duplicate-before-stale` | `SkillAppliedOps` 资源 receipt（S1-2 第七轮；单槽改 receipt 集，第八轮 S1-1） | bundle+CAS 成功、ledger mark 前 crash → 重放同 op 命中 receipt 集返回已落结果，不报 `stale_base_revision`（与 memory `applyops-duplicate-before-stale` 同型） |
 | **T58** | `memory-terminal-ack-scoped-and-idempotent` | `acknowledgeTerminalOps(scopeGroups)`（S1-5） | 分组定位 scope 记录；重复 ack（crash 后重放）幂等成功；两无 opId → `invalid_structure`；跨 scope 组互不串扰 |
 | **T59** | `terminal-recovery-advances-persisted-effective-through` | `effectiveThrough` 持久化进 attempt（S1-6） | markTerminal 后 advance 前 crash → 恢复按持久化值 advance，不重算不跳段；重 claim 不产生重复 memory 写入 |
 | **T60** | `pending-catalog-switches-only-on-approve` | pending 四字段 + 可见性分离（S1-4、原则 #9） | patch 阶段 record 级 `catalogSummary` 不变（改 description 的 patch 不泄漏进 catalog）；approve 单 CAS 同时切 pointer/digest/summary/清 pending |
 | **T61** | `provider-get-uses-listed-candidate-summary` | definition summary 取 candidate 冻结字段（S1-4；`SkillCandidate extends SkillSummary`） | list(N) 后并发 approve(N+1)+invalidate 落在 get 内 → definition body/summary 仍同为 N；不产生 N body + N+1 summary 错配 |
+| **T62** | `op-id-stable-across-planned-recovery` | `OpId = hash(attemptId, resourceKind, stableOpIndex, canonicalOpDigest)`（deriveOpId 纯派生，第八轮 S1-3） | 同一 immutable stored plan 任意次 recovery/resume → 全部 op opId 逐位相同；模型提供的 opId 被拒绝；不依赖持久化分配器 |
+| **T63** | `changed-op-payload-changes-op-id` | canonicalOpDigest 参与 hash | 同 index 同 attempt 下任一 op payload 变化 → 该 op opId 变化、其余不变 |
+| **T64** | `create-same-op-reservation-and-record-retry` | `NameReservation{skillId, reservedByOpId}` + record receipt 查重（第八轮 S1-2） | record CAS 后 crash 重放同 create op → duplicate 非 `name_conflict`；仅 reservation 后 crash 重放 → resume 补完；异 op 抢同 name → `name_conflict` |
+| **T65** | `skill-receipt-survives-later-same-skill-op` | `SkillAppliedOps` 对称 receipt（第八轮 S1-1） | op A 落 record、op B（跨 session）再落同技能后，A 重放命中 receipt 集 → duplicate，不报 `stale_base_revision`（单槽 `lastAppliedOpId` 反例钉死）；terminal ack 后 A 入有界环仍可查重 |
+| **T66** | `terminal-ack-only-applied-opstates` | ack 输入 = `opStates` applied/duplicate（第八轮 S1-4） | partial-saga（M1 applied、M2 未执行）terminal → 只 ack M1，不误报 `invalid_structure`；零 mutation terminal（admission 拒绝）→ 无 ack 调用；skill receipt 按 ref 分组同规则 |
+| **T67** | `terminal-finalization-is-idempotent` | finalization 定序 + 单调 advance（第八轮 S1-5） | ack → advance（`reviewedThroughSeq = max`）→ markFinalized 链上每个边界 crash 注入后重放均安全收敛；advance-twice-is-noop；finalized 后 recovery 不再重放该 attempt |
+| **T68** | `terminal-status-does-not-imply-range-consumption` | 仅 `rangeDisposition === 'consumed'` 可 advance（第八轮 S1-6） | superseded（stale/budget）/retryable（拒绝/瞬态/前台取消）/manual 的 terminal recovery 一律不推进 high-water、清 inFlight 待重 claim；committed+noChange → consumed 且按持久化 effectiveThrough 推进 |
 
 ## 2. Hermes 参考锚点（本地 clone `05c248d8`，2026-08-29）
 
@@ -91,4 +98,4 @@
 
 ## 4. 验收门
 
-61 项活跃全绿（2 项历史回归记录在案）；E0 全结案回填；`git diff` 仅新增测试与包骨架（zero behavior change）；Agent Note 记录结论与被修正假设（含 T36 期望值改写、T15/T41 durable-vs-live 对照、T54–T61 对第七轮六项协议缺口的钉死）。
+68 项活跃全绿（2 项历史回归记录在案）；E0 全结案回填；`git diff` 仅新增测试与包骨架（zero behavior change）；Agent Note 记录结论与被修正假设（含 T36 期望值改写、T15/T41 durable-vs-live 对照、T54–T61 第七轮六项协议缺口、T62–T68 第八轮 receipt/finalization/disposition 缺口）。

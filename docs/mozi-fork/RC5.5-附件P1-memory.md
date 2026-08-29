@@ -4,9 +4,9 @@
 >
 > 包：`packages/memory/memory` + `packages/util/content-scan`。前置：P0 全绿。
 >
-> 相对 RC5.3-P1：单一 Service 内部双逻辑 scope（不再双实例组合）；composite Publisher 单消息双节；receipt 二分 + ack 协议；project 身份走 `ctx.fs.resolve().targetKey`。相对 RC5.4-P1（第七轮 S1-5）：`acknowledgeTerminalOps` 改 scope 分组签名且幂等——in pending 迁移、已在环 duplicate-ack 成功、两无 `invalid_structure`；P3 的 terminal-recovery 依赖此幂等性重放 `terminal && !terminalAcked`。
+> 相对 RC5.3-P1：单一 Service 内部双逻辑 scope（不再双实例组合）；composite Publisher 单消息双节；receipt 二分 + ack 协议；project 身份走 `ctx.fs.resolve().targetKey`。相对 RC5.4-P1（第七轮 S1-5）：`acknowledgeTerminalOps` 改 scope 分组签名且幂等——in pending 迁移、已在环 duplicate-ack 成功、两无 `invalid_structure`。相对 RC5.5-P1（第八轮）：opId 由 P3 `deriveOpId` 纯派生供给（T62/T63）——`HostMemoryOp.opId` 与 `deriveEntryId(opId)` 由此获得跨恢复稳定性，receipt 查重在 crash/recovery 后成立；ack 调用输入来自 P3 的 applied-only `opStates`（第八轮 S1-4），P1 侧签名不变。
 >
-> 日期：2026-08-29
+> 日期：2026-08-29（RC5.5.1 增补 2026-08-30）
 
 ## 1. 模块布局
 

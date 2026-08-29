@@ -1,16 +1,16 @@
-# 自我进化机制方案 RC5.5（第七轮收口：定位传递 + 幂等协议 + 可见谱系）
+# 自我进化机制方案 RC5.5.1（第七轮收口 + 第八轮开工补丁：receipt 对称 + finalization 协议 + range 处置）
 
 > 状态：设计备忘（fork 侧工作文档，登记于 translation-pairing 排除清单）
 >
-> 版本脉络：RC1 → 评审（`评审报告.md`）→ RC4 → 第二轮核验（`RC5-外部建议核验与处置.md`）→ RC5.1 → 第四轮（`RC5.1-评审报告.md` + `RC5.2-第四轮评审核验与处置.md`）→ RC5.2 → 第五轮（`RC5.2评审报告.md` + `RC5.3-第五轮评审核验与处置.md`）→ RC5.3 → 第六轮（`RC5.3-第六轮纠错完善建议.md` + `RC5.4-第六轮评审核验与处置.md`，12 S1 全部证实）→ RC5.4 → 第七轮（`RC5.4-第七轮收口评审.md` + `RC5.5-第七轮评审核验与处置.md`，6 项全部证实）→ 本 RC5.5
+> 版本脉络：RC1 → 评审（`评审报告.md`）→ RC4 → 第二轮核验（`RC5-外部建议核验与处置.md`）→ RC5.1 → 第四轮（`RC5.1-评审报告.md` + `RC5.2-第四轮评审核验与处置.md`）→ RC5.2 → 第五轮（`RC5.2评审报告.md` + `RC5.3-第五轮评审核验与处置.md`）→ RC5.3 → 第六轮（`RC5.3-第六轮纠错完善建议.md` + `RC5.4-第六轮评审核验与处置.md`，12 S1 全部证实）→ RC5.4 → 第七轮（`RC5.4-第七轮收口评审.md` + `RC5.5-第七轮评审核验与处置.md`，6 项全部证实）→ RC5.5 → 第八轮（`RC5.5-第八轮开工评审.md` + `RC5.5.1-第八轮评审核验与处置.md`，6 项全部证实）→ 本 RC5.5.1
 >
 > 函数级规格：`RC5.5-函数级规格总纲.md` + 附件 P0–P4（类名/签名/调用关系/验收标准，TDD）
 >
 > 证据基线：upstream master = `cd5ef81`（fork 零代码漂移）；Hermes 锚点 = 本地 clone `05c248d8`（第五轮处置 §5）；证据账本 = 历轮评审/处置文档
 >
-> 阶段裁定（第七轮）：**RC5.4 = 架构批准 / 实现条件批准**——九原则冻结；P0 即刻开工；P1、P2 各带前置修补；P3/P4 冻结纯文档前推，剩余问题改由 REAL composition / crash injection / concurrency injection 在代码中发现
+> 阶段裁定（第八轮）：**RC5.5.1 = Architecture Frozen / Implementation Approved**——九原则与包边界冻结；P0/P1 即刻 GO；P2 先红 T62/T64/T65 三组再写 mutation path；P3 骨架与纯函数 GO、finalization commit path 前置 T66–T68 三协议；P4 after P3；P5 按原计划。自此停发 RC5.6 式文档套件：后续发现默认按 bug / invariant test / implementation adjustment 处理，仅当 P0 REAL-composition 反证 DSH API 基础假设时才重开架构。首版 crash model = Host/process crash + restart（`fs-local/src/fsio.ts:546-594` staged + atomic rename），不声称断电/内核崩溃级保证
 >
-> 日期：2026-08-29
+> 日期：2026-08-29（RC5.5.1 增补 2026-08-30）
 
 ## 0.0 相对 RC5.4 的增量（第七轮 6 项收口，处置 §1）
 
@@ -21,6 +21,15 @@
 5. **ack 分组 + 幂等（S1-5）**：`acknowledgeTerminalOps(scopeGroups)`；语义三分——in pending → 迁移、已在环 → duplicate-ack 成功、两无 → `invalid_structure`；P3 terminal-recovery 先重放 `terminal && !terminalAcked` 再接受新 mutation。
 6. **`effectiveThrough` 持久化（S1-6）**：进 `ReviewAttempt`，LearningView 完成后、planner 前回填；terminal-recovery 唯一推进依据，禁止恢复期重算。
 
+## 0.0.1 相对 RC5.5 的增量（第八轮 6 项开工补丁，处置 §1）
+
+1. **Skill receipt 对称化（S1-1，T65）**：退役 `lastAppliedOpId` 单槽——跨 session 窗口（A 落账、B 再写、A 重放）下已发生的 op 被误判 `stale_base_revision`。`ManagedSkillRecord.appliedOps = SkillAppliedOps { pendingReceipts, recentTerminalReceipts }` 与 Memory 对称；单 record CAS 同时落 state + receipt；重放查重 `pending ∪ recentTerminal` 先于 base 校验；`ManagedSkillService.acknowledgeTerminalOps({ref, opIds}[])` terminal 后入有界环。
+2. **create 幂等（S1-2，T64）**：`NameIndex` 值改 `NameReservation { skillId, reservedByOpId }`——同 op 重入 resume、异 op `name_conflict`；create 流程重排为 receipt 查重 → op-aware reserve → 完成标记写 bundle → record CAS + receipt。
+3. **`OpId` 派生钉死（S1-3，T62/T63）**：`OpId = hash(attemptId, resourceKind, stableOpIndex, canonicalOpDigest)`（`deriveOpId` 纯派生，模型不提供 opId，恢复重放同 op 同 id）——`ManagedRevisionId`、两资源 receipt、`MemoryEntryId` 的重放稳定性共同 rooted 在此。
+4. **ack 输入修正（S1-4，T66）**：ack 权威输入 = `ReviewAttempt.opStates[]` 中 `state ∈ {applied, duplicate}` 的 op（非 plan 全量——partial-saga 与零 mutation terminal 不再误报 `invalid_structure`）；`opStates` 升格正式类型 `ReviewOpState`。
+5. **finalization 协议（S1-5，T67）**：`terminalAcked?` 改名 `finalized`（"字段存在 ≠ 协议存在"再现）；定序 `markTerminal(status, rangeDisposition) → ack applied receipts（memory + skill）→ advance（仅 consumed，单调 max-guard）→ markFinalized`；recovery 入口 `terminal && !finalized`。
+6. **`RangeDisposition`（S1-6，T68，P3 最重 blocker）**：`consumed | superseded | retryable | manual` 随 markTerminal 落账；**仅 consumed 允许 advance(effectiveThrough)**，其余 disposition 恢复时清 inFlight 不推进（下次触发重 claim，宁重审不跳审）。L1 映射修正评审提案：consumed 仅 committed/noChange；stale/budget → superseded；拒绝类（含 admission/policy/planner 瞬态）→ retryable 背退——评审的"policy rejected → consumed"自带"若产品决定不再重试"括号，L1 不采纳：零 commit 拒绝的 range 重审合法（base state 可能已变），advance 即违反 `saga-range-never-skips`；manual 预留 L2。
+
 ## 0. 相对 RC5.3 的四组实质变化
 
 1. **唯一所有权（第六轮 S1-1..S1-3、S1-7）**：Cordis Service 同名注册即抛（`vendor/cordis/src/service.ts:37-53`、`reflect.ts:272-285`）、`DomainFacility` 单开域名（`storage-domain/src/index.ts:66-95`）——一切共享资源必须有一个唯一 owner。Memory = 单一 `MemoryService` 内部管 project/user 两逻辑 scope（一个 composite Publisher 发一条消息）；Skill = P2 一步到位的 `packages/skill/skill-managed` Service（唯一 domain owner，同包 named export `skill_manage` 工具插件挂 authoring preset），P3 的抽出步骤取消。NameIndex 首次 reserve 走 `ensureNameIndex` 初始化协议。
@@ -28,7 +37,7 @@
 3. **治理状态机闭环（S1-8、S1-9、S2-5）**：新增 `rejected` 状态（draft → rejected → 显式 reopen；`archived` 专属曾 active 生命周期）；active patch 改 `pendingRevision`——写新 revision 不切 `currentRevision`，治理 approve 才 CAS 切 pointer；draft patch 仍直接推进（本就不可见）。模型自此在 L1 无任何路径改动模型可见技能。
 4. **attempt 与 receipt 协议化（S1-10..S1-12、S1-11）**：`attemptId = hash(rangeId, attemptNo)`（attemptNo 由 cursor durable 分配；`baseStateDigest` 降为 attempt 字段，消除 preclaim 循环）；`budget_exceeded` → zero commit → consolidation 生成**新 attempt** 重走 whole-plan admission；receipt 二分 `pendingReceipts`（non-terminal 永不淘汰）+ `recentTerminalReceipts`（terminal 后 ack 入有界环才可 GC）——保留正确性显式编码，ack 缺失=过量保留（安全方向）。
 
-锁定项（不再讨论）：自进化业务不进 `agent-loop`；LLM 只 proposes；host 拥有全部权威字段；spawn 复盘；子会话持久化保留 + 检索面隔离；project 自治域先行；L0→L2 rollout；首版无 `review/*` 事件；LLM curator consolidation 默认关；不改 registry 消费侧；不改 durable 事件面（telemetry 走 live 事件）。
+锁定项（不再讨论）：自进化业务不进 `agent-loop`；LLM 只 proposes；host 拥有全部权威字段；spawn 复盘；子会话持久化保留 + 检索面隔离；project 自治域先行；L0→L2 rollout；首版无 `review/*` 事件；LLM curator consolidation 默认关；不改 registry 消费侧；不改 durable 事件面（telemetry 走 live 事件）；不声称断电/内核崩溃级 crash 保证（首版 crash model = process crash + restart）。
 
 ## 0.1 九条第一原则（终稿）
 
@@ -49,6 +58,10 @@ ProjectKey（branded）        = hash(ctx.fs.resolve(findProjectRoot(cwd)).targe
 SkillId（branded）           = hash(ProjectKey, normalizedName)——确定性，同名并发天然串行
 ManagedSkillRef（branded）   { projectKey, skillId }——一切 Store/Authoring/治理 API 的定位单位，
                                禁止裸传 SkillId（单向 hash 无法反推 projectKey，第七轮 S1-1）
+OpId（branded）              = hash(attemptId, resourceKind, stableOpIndex, canonicalOpDigest)
+                               ——deriveOpId 纯派生（第八轮 S1-3，T62/T63）：模型不提供 opId；
+                               同一 immutable plan 任意次 recovery 同 opId；payload 变 → id 变；
+                               ManagedRevisionId/两资源 receipt/MemoryEntryId 的重放稳定性共同 rooted 在此
 ManagedRevisionId（branded） = hash(skillId, requestedByOpId)——op-derived：并发 op 不共路径，
                                同 op 重放同路径（第七轮 S1-2）
 ReviewCursor（per-session）  { sessionId, reviewedThroughSeq, desiredThroughSeq, policyVersion,
@@ -58,12 +71,18 @@ ReviewCursor（per-session）  { sessionId, reviewedThroughSeq, desiredThroughSe
 ReviewRangeId                = hash(sessionId, fromExclusive, throughInclusive, policyVersion,
                                learningViewVersion)
 ReviewAttemptId              = hash(rangeId, attemptNo)——attemptNo cursor durable 分配
+ReviewOpState                { opId, resource: 'memory'|'skill', resourceRef,
+                               state: prepared|applied|duplicate|failed }——ledger 缺席 = not-started；
+                               saga recovery authority（第八轮 S1-4）：ack 只取 applied|duplicate
 ReviewAttempt（append-only） { attemptId, attemptNo, status: planning|planned|committing|
                                committed|failed|cancelled, baseStateDigest?, plan?, planDigest?,
-                               baseRevisions?, opStates[], attemptCount, lastFailureCode?,
-                               nextRetryAt?, terminalAcked?, effectiveThrough? }——plan 永不可变；
-                               effectiveThrough 在 LearningView 完成后、planner 前回填，
-                               terminal-recovery 唯一推进依据（第七轮 S1-6，禁止恢复期重算）
+                               baseRevisions?, opStates: ReviewOpState[], attemptCount,
+                               lastFailureCode?, nextRetryAt?, finalized?, effectiveThrough?,
+                               rangeDisposition?: consumed|superseded|retryable|manual }
+                               ——plan 永不可变；effectiveThrough 在 LearningView 完成后、planner 前
+                               回填（第七轮 S1-6，禁止恢复期重算）；rangeDisposition 随 markTerminal
+                               落账，仅 consumed 允许 advance（第八轮 S1-6，T68）；finalized = 本
+                               terminal attempt 全部恢复义务完成（第八轮 S1-5，T67）
 ReviewPlan（模型数据）       { memory[{ action, target:'project'|'user', targetHint?, content?,
                                kind, evidence[{seq, span?, fieldPath?}], reason, confidence }],
                                skills[{ action:'create-draft'|'patch-draft', skillName,
@@ -79,13 +98,18 @@ ManagedSkillRecord           { projectKey, skillId, name, owner,
                                state: draft|active|stale|archived|rejected,
                                currentRevision: ManagedRevisionId, contentDigest,
                                pendingRevision?{ revisionId, contentDigest, catalogSummary,
-                               createdByOpId }——四字段随 approve 单 CAS 原子切换（S1-4），
+                               createdByOpId }——四字段随 approve 单 CAS 原子切换（第七轮 S1-4），
                                catalogSummary{ name, description, whenToUse?, invocation },
                                revision, createdAt, promotedAt?, stateChangedAt?, staleAt?,
-                               archivedAt?, createdByAttemptId?, lastAppliedOpId?, pinned }
-                               ——lastAppliedOpId 在 draft 推进/pending 写入的同一 CAS 内更新，
-                               patch 先查重（duplicate-before-stale，资源 receipt，S1-2）
-NameIndex（per-project）     { projectKey, nameToSkillId }——ensureNameIndex + 单 RMW 原子占位
+                               archivedAt?, createdByAttemptId?,
+                               appliedOps: SkillAppliedOps, pinned }
+SkillAppliedOps              { pendingReceipts: SkillOpReceipt[],       // non-terminal 永不淘汰
+                               recentTerminalReceipts: BoundedRing }    // 与 Memory 对称（第八轮 S1-1）
+SkillOpReceipt               { opId, action, revisionId?, resultDigest }——CAS 内与 state 同笔落账；
+                               重放查重 pending ∪ recentTerminal 先于 base 校验（T65）
+NameIndex（per-project）     { projectKey, nameToReservation }——ensureNameIndex + 单 RMW；
+                               NameReservation { skillId, reservedByOpId }：同 op 重入 resume、
+                               异 op name_conflict（第八轮 S1-2，T64）
 ```
 
 ## 2. 包规划与挂载
@@ -102,9 +126,9 @@ NameIndex（per-project）     { projectKey, nameToSkillId }——ensureNameInde
 
 ## 3. 机制要点（细节见附件）
 
-- **memory**（P1）：单 Service 双 scope；发布 = `sanitizeForPublication → buildSnapshotSections（含两 scope 节）→ combined digest → 比对 → 发布 CompositeMemorySnapshot`；receipt 二分 + `acknowledgeTerminalOps(scopeGroups)`（幂等三分：pending 迁移 / 已入环 duplicate-ack / 两无 `invalid_structure`，S1-5）；双闸扫描 + fail-open 不变。
-- **skill-managed**（P2）：一切 API 走 `ManagedSkillRef`，禁止裸 `SkillId`；`list()` storage-only、可见谱系 = `active | stale`（S1-3；单条损坏 → last-good + `complete:false`）；`get()` = projectKey 校验 → exact revision → 整 bundle digest → 读边界重扫 → definition（summary/invocation 取 candidate 冻结字段、content 取 `locator.revision`，S1-4）；revision 目录 op-derived（`revisions/<ManagedRevisionId>/`）+ 全量重写 + 完成标记 `createIfAbsent`（S1-2）；create = `checkNameConflict(AuthoringContext) → ensureNameIndex+reserveName → validateStructure → 写 revision → record(draft, catalogSummary, lastAppliedOpId)`；patch 先查重（duplicate-before-stale）、active 且 pending 未决 → `pending_pending_conflict`，draft 直进 currentRevision、active 只进 pendingRevision 四字段；promote/activate/reject/reopen = 治理面 CAS（activatePending 四字段原子切换）；配额 fail-loud。
-- **触发与取消**（P3）：三触发模式 + settlement（planning 取消清 inFlight；planned/committing 转 resumable 续 stored plan）——RC5.3 已定，不变；**terminal-recovery**（S1-5/S1-6）：启动恢复先重放 `status ∈ terminal && !terminalAcked`（幂等 ack → `advance(effectiveThrough)` → 清 inFlight）再接受新 review mutation。
+- **memory**（P1）：单 Service 双 scope；发布 = `sanitizeForPublication → buildSnapshotSections（含两 scope 节）→ combined digest → 比对 → 发布 CompositeMemorySnapshot`；receipt 二分 + `acknowledgeTerminalOps(scopeGroups)`（幂等三分：pending 迁移 / 已入环 duplicate-ack / 两无 `invalid_structure`，S1-5；输入来自 P3 的 applied-only opStates，第八轮 S1-4）；opId 由 `deriveOpId` 供给 → `MemoryEntryId` 与 receipt 跨恢复稳定（第八轮 S1-3）；双闸扫描 + fail-open 不变。
+- **skill-managed**（P2）：一切 API 走 `ManagedSkillRef`，禁止裸 `SkillId`；`list()` storage-only、可见谱系 = `active | stale`（S1-3；单条损坏 → last-good + `complete:false`）；`get()` = projectKey 校验 → exact revision → 整 bundle digest → 读边界重扫 → definition（summary/invocation 取 candidate 冻结字段、content 取 `locator.revision`，S1-4）；revision 目录 op-derived（`revisions/<ManagedRevisionId>/`）+ 全量重写 + 完成标记 `createIfAbsent`（S1-2）；**资源 receipt 与 Memory 对称**（`SkillAppliedOps`，CAS 内同笔落账，重放查重先于 base 校验，第八轮 S1-1/T65）；create = receipt 查重 → `checkNameConflict(AuthoringContext)` → `ensureNameIndex + reserveName(…, requestedBy)`（NameReservation：同 op resume / 异 op conflict，第八轮 S1-2/T64）→ `validateStructure` → 写 revision → record(draft, catalogSummary, receipt)；patch 先查重、active 且 pending 未决 → `pending_pending_conflict`，draft 直进 currentRevision、active 只进 pendingRevision 四字段；promote/activate/reject/reopen = 治理面 CAS（activatePending 四字段原子切换）；`acknowledgeTerminalOps({ref, opIds}[])`；配额 fail-loud。
+- **触发与取消**（P3）：三触发模式 + settlement（planning 取消清 inFlight；planned/committing 转 resumable 续 stored plan）——RC5.3 已定，不变；**finalization 协议**（第八轮 S1-5/S1-6，T66–T68）：opId = `deriveOpId` 纯派生 → saga commit（`markOpState` 落 `ReviewOpState`）→ `markTerminal(status, rangeDisposition)` → ack **applied-only** receipts（memory + skill）→ `advance(effectiveThrough)` **仅 disposition=consumed**（单调 max-guard）→ `markFinalized`；启动 recovery 重放 `terminal && !finalized`，非 consumed disposition 清 inFlight 不推进。
 - **admission + saga**（P3）：whole-plan admission；`stale_base_revision` → 新 attempt replan；`budget_exceeded` → zero commit → consolidation 新 attempt（`maxConsolidationAttempts` 默认 2）→ 仍败 terminal 零 commit；L1 启用 scope = project（ReviewInput/persona 声明）+ `target:'user'` backstop 拒绝（记录 + `target_scope_disabled`）。
 - **治理面**（P3）：宿主命令 list/show/approve/reject/reopen——approve 双语义（draft 上架；active pending 切 pointer），全部全重验后走 Service CAS；模型工具面无任何治理动作。
 - **usage**（P4）：live `ctx.on('tools/result')`——`exec.name==='skill' && !result.isError && result.value?.provider === MANAGED_SKILL_PROVIDER_NAME`，按确定性 `skillId = hash(projectKey, name)` 归属（无需查表）；`/name` 只作聚合遥测；进程内存活期观测，HMR dispose 即止。
@@ -113,7 +137,7 @@ NameIndex（per-project）     { projectKey, nameToSkillId }——ensureNameInde
 
 ## 4. Phase 门槛（P0–P5）
 
-P0 = Evidence Lock 61 活跃 + 2 历史回归（附件 P0，含第七轮 T54–T61）。P1 = 单 Service 双 scope + composite 发布 + receipt 二分 + ack 分组幂等协议 + terminal-recovery 支撑。P2 = skill-managed Service 一步到位（ManagedSkillRef 定位、storage-only list、visible = active|stale、op-derived RevisionId + 完成标记、资源 receipt、pendingRevision 四字段 + 互斥、rejected/reopen、NameIndex ensure、配额、跨层 REAL 枚举）。P3 = review 全链（attempt 简化、consolidation 新 attempt、治理双语义、scope backstop、effectiveThrough 持久化 + terminal-recovery）+ session-query 默认过滤。P4 = curator（active 谱系状态机 + live usage 归属；stale 可见可复活）。P5 = rollout + 指标两拆。
+P0 = Evidence Lock 68 活跃 + 2 历史回归（附件 P0，含第七轮 T54–T61、第八轮 T62–T68）。P1 = 单 Service 双 scope + composite 发布 + receipt 二分 + ack 分组幂等协议（opId 由 deriveOpId 供给）。P2 = skill-managed Service 一步到位（ManagedSkillRef 定位、storage-only list、visible = active|stale、op-derived RevisionId + 完成标记、**SkillAppliedOps 资源 receipt + NameReservation op-aware 占位**、pendingRevision 四字段 + 互斥、rejected/reopen、NameIndex ensure、配额、跨层 REAL 枚举）；**先红 T62/T64/T65 三组再写 mutation path**。P3 = review 全链（attempt 简化、consolidation 新 attempt、治理双语义、scope backstop、effectiveThrough 持久化、deriveOpId + ReviewOpState + markTerminal(disposition)/markFinalized finalization 协议）+ session-query 默认过滤；**骨架/纯函数先行，finalization commit path 前置 T66–T68**。P4 = curator（active 谱系状态机 + live usage 归属；stale 可见可复活）。P5 = rollout + 指标两拆。
 
 每 Phase 固定门槛：per-file 100% 覆盖、REAL-composition boot、HMR disposal、snapshot、双 SDK（类型面变更时）、doc-sync、Agent Note。
 
