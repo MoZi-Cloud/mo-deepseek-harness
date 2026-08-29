@@ -1,8 +1,10 @@
-# RC5.4 附件 P4 — Skill curator（函数级规格）
+# RC5.5 附件 P4 — Skill curator（函数级规格）
 
-> 上位：`RC5.4-函数级规格总纲.md`；架构依据 `自我进化机制-RC5.4-方案.md`（第六轮 S1-6、S2-5）。
+> 上位：`RC5.5-函数级规格总纲.md`；架构依据 `自我进化机制-RC5.5-方案.md`（第六轮 S1-6、S2-5；第七轮 S1-3）。
 >
 > 包：`packages/skill/skill-curator`；写通道唯一 = `ManagedSkillService.transitionManagedSkill`；usage 改 live `tools/result`（S1-6）；状态机只迁移 active 谱系（S2-5）。
+>
+> 相对 RC5.4-P4（第七轮 S1-3）：provider 可见谱系 = `active | stale`（P2）——stale 保持可发现、可载入，meaningful-use 复活通路闭合；`/name` 人工手势走 pre-step 注入（`tool-skill/src/index.ts:177-199`），不产生 `tools/result` 事件，天然不入 modelLoads 锚点。
 >
 > 前置：P3 全绿。日期：2026-08-29
 
@@ -41,8 +43,8 @@ Transition = { to: 'active'|'stale'|'archived',
 - 注册：`ctx.on('tools/result', (exec, result) => { enqueue(...) })`（emit、host 层收全量、listener 故障被容器化；`core/tools/src/index.ts:193-198,1662-1665`）。
 - **modelLoads 判据**：`exec.name==='skill'` 且 `!result.isError` 且 `result.value?.provider === MANAGED_SKILL_PROVIDER_NAME`（E0-11 钉字段路径）→ 按 `skillId = hash(resolveProjectKey(exec.agent.session.header.cwd), result.value.name)` 确定性归属（无需查表）；human 胜出不误计（T41）。
 - **userLoads**：session `skill-invocation` source 聚合遥测（无 provider 字段，不进 stale 锚点）。
-- 语义：进程内存活期观测——插件未挂载/HMR dispose 后的载入不计（best-effort，README Known Limitations 声明）；usage 丢失只影响 curator 质量。
-- 验收：`count-successful-managed-provider-load-only`（T41）、`human-winner-load-not-misattributed`（T41）、`listener-never-throws`、`dispose-stops-observation-with-log`、`durable-event-not-used`（对照 T15：durable 面无 provider，S1-6 before/after 断言）。
+- 语义：进程内存活期观测——插件未挂载/HMR dispose 后的载入不计（best-effort，README Known Limitations 声明）；usage 丢失只影响 curator 质量。stale 技能仍在 provider 可见谱系（S1-3），其模型载入照常计入 modelLoads 并驱动复活（T54）。
+- 验收：`count-successful-managed-provider-load-only`（T41）、`human-winner-load-not-misattributed`（T41）、`stale-load-feeds-revival-anchor`（T54）、`listener-never-throws`、`dispose-stops-observation-with-log`、`durable-event-not-used`（对照 T15：durable 面无 provider，S1-6 before/after 断言）。
 
 #### `class SkillCurator`
 - `async runPass(signal): Promise<CuratorReport>` — runMaintenance 槽：`listManaged(projectKey)`（`owner==='agent'` 全量）→ 逐条 `transition` → 迁移经 `transitionManagedSkill`（CAS + invalidate；bundle 原位）→ 遥测（orphan revision/bytes、配额水位、pending 积压数）→ 报告落 ledger。

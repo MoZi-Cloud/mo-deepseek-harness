@@ -1,10 +1,10 @@
-# RC5.4 附件 P1 — Memory Service + durable recall（函数级规格）
+# RC5.5 附件 P1 — Memory Service + durable recall（函数级规格）
 
-> 上位：`RC5.4-函数级规格总纲.md`；架构依据 `自我进化机制-RC5.4-方案.md`（第六轮 S1-1/S1-2/S1-4/S1-12、S2-3）。
+> 上位：`RC5.5-函数级规格总纲.md`；架构依据 `自我进化机制-RC5.5-方案.md`（第六轮 S1-1/S1-2/S1-4/S1-12、S2-3；第七轮 S1-5）。
 >
 > 包：`packages/memory/memory` + `packages/util/content-scan`。前置：P0 全绿。
 >
-> 相对 RC5.3-P1：单一 Service 内部双逻辑 scope（不再双实例组合）；composite Publisher 单消息双节；receipt 二分 + ack 协议；project 身份走 `ctx.fs.resolve().targetKey`。
+> 相对 RC5.3-P1：单一 Service 内部双逻辑 scope（不再双实例组合）；composite Publisher 单消息双节；receipt 二分 + ack 协议；project 身份走 `ctx.fs.resolve().targetKey`。相对 RC5.4-P1（第七轮 S1-5）：`acknowledgeTerminalOps` 改 scope 分组签名且幂等——in pending 迁移、已在环 duplicate-ack 成功、两无 `invalid_structure`；P3 的 terminal-recovery 依赖此幂等性重放 `terminal && !terminalAcked`。
 >
 > 日期：2026-08-29
 
@@ -34,6 +34,7 @@ HostMemoryOp = { opId, entryId, now, action:'add'|'update'|'remove', content?, k
 AppliedOpReceipts = { pendingReceipts: OpReceipt[],       // non-terminal attempt 的 op，永不 FIFO
                       recentTerminalReceipts: BoundedRing // terminal ack 后入环，仅此区可 GC
                     }
+TerminalAckGroup = { scope: MemoryScope, opIds: readonly OpId[] }  // ack 分组定位（S1-5）
 MemoryState = { schemaVersion:1, revision, entries: MemoryEntry[], appliedOps: AppliedOpReceipts }
 ApplyOpResult = { opId, status:'applied'|'duplicate', resultDigest? }
 PublicationEntry = { kind:'safe', entry } | { kind:'blocked', entryId, reason }
@@ -62,8 +63,8 @@ MemoryConfig = { maxEntries, maxStoredChars, maxEntryChars, maxSnapshotTokens,
 - 验收：`fold-add-update-remove`、`fold-duplicate-before-base-check`、`fold-budget-integration-batch`、`fold-unknown-entry-rejects`、`fold-new-op-goes-pending`。
 
 #### `splitReceipts(appliedOps, terminalOpIds, windowSize): AppliedOpReceipts`
-- 职责：纯函数——把 `terminalOpIds`（ack）从 pending 迁入 recentTerminal 环（FIFO 淘汰超窗最旧）；非 terminal 的 pending **永不迁出、永不淘汰**（T52）。`terminalOpIds ⊄ pending` → `invalid_structure`（ack 早于 terminal 违约 fail-loud）。
-- 验收：`split-ack-moves-to-ring`、`split-pending-never-evicted`（T52）、`split-ring-evicts-oldest`、`split-10k-mutations-bounded-ring`、`split-ack-before-terminal-fails`。
+- 职责：纯函数，逐 `terminalOpId` 三分（S1-5 幂等语义）：在 pending → 迁入 recentTerminal 环（FIFO 淘汰超窗最旧）；已在环 → duplicate-ack no-op（crash 后重放安全）；两处皆无 → `invalid_structure`（ack 早于 terminal 或 op 从未应用，fail-loud）。非 terminal 的 pending **永不迁出、永不淘汰**（T52）。
+- 验收：`split-ack-moves-to-ring`、`split-pending-never-evicted`（T52）、`split-ring-evicts-oldest`、`split-10k-mutations-bounded-ring`、`split-reack-idempotent`（T58）、`split-orphan-opid-fails`。
 
 #### `sanitizeForPublication(entries): PublicationEntry[]`
 - 验收：`sanitize-safe-passthrough`、`sanitize-blocked-placeholder`、`sanitize-caution-passes`、`sanitize-pure-no-state`。
@@ -81,8 +82,8 @@ MemoryConfig = { maxEntries, maxStoredChars, maxEntryChars, maxSnapshotTokens,
 #### `class MemoryService extends Service`（唯一 memory 域 opener，T42）
 - `getState(scope): Promise<MemoryState>` — `ensureInitialized` 后读。
 - `applyOps(scope, ops, expectedBaseRevision): Promise<ApplyOpsResult>` — 单 RMW 闭包：receipt 查重先于 base 检查；写边界扫描（blocked → `threat_scan_blocked`）；折叠提交（新 op 入 pending）。
-- `acknowledgeTerminalOps(opIds): Promise<void>` — S1-12：读改写 appliedOps（`splitReceipts`）；由 session-review 在 attempt 达 terminal 时调用；ack 缺失 = 过量保留（安全），无早 ack 路径。
-- 验收：`applyops-first-record-creates`、`applyops-duplicate-before-stale`、`applyops-mixed-duplicate-stale-rejects-whole`、`applyops-scan-blocks-write`、`applyops-atomic-batch`、`applyops-scope-isolation-project-user`（T42 关联）、`schema-version-mismatch-passthrough`、`ack-terminal-ops-moves-receipts`（T52）。
+- `acknowledgeTerminalOps(groups: readonly TerminalAckGroup[]): Promise<void>` — S1-12 + S1-5：逐组读改写对应 scope 的 appliedOps（`splitReceipts` 幂等三分）；由 session-review 在 attempt 达 terminal 时调用（按 plan memory op 的 target/scope 分组），terminal-recovery 重放时重复调用安全（T58）；ack 缺失 = 过量保留（安全方向），无早 ack 路径（两无 opId 仍 `invalid_structure`）。
+- 验收：`applyops-first-record-creates`、`applyops-duplicate-before-stale`、`applyops-mixed-duplicate-stale-rejects-whole`、`applyops-scan-blocks-write`、`applyops-atomic-batch`、`applyops-scope-isolation-project-user`（T42 关联）、`schema-version-mismatch-passthrough`、`ack-terminal-ops-moves-receipts`（T52）、`ack-scoped-groups-isolate`、`ack-retry-idempotent`（T58）、`ack-orphan-group-invalid-structure`。
 
 #### `latestPublishedMemory(session): { digest, seq } | undefined`
 - 验收：`latest-prefers-highest-seq`、`absent-undefined`、`ignores-non-memory`。

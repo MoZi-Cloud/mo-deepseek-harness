@@ -132,4 +132,4 @@
 
 ## 6. 后续
 
-待"继续"后产出 RC5.5 增量补丁：附件 P0（+T54–T61）、P1（ack 签名/语义、terminal-recovery、`effectiveThrough`）、P2（ManagedSkillRef、op-derived RevisionId + 完成标记、可见谱系、pending 四字段、pending 互斥）、P3（terminal-recovery 协议条目、ReviewAttempt 字段）、方案（数据模型三处字段修订）与总纲同步，附变更记录；随后进入 P0 代码实现。
+RC5.5 增量补丁已随本处置落地：七份设计文档自 RC5.4- 命名原位更名为 RC5.5-（git 保留重命名历史；本文 §1/§5 引用的 `自我进化机制-RC5.4-方案.md` 等即现 `自我进化机制-RC5.5-方案.md` 等）——附件 P0（T33/T49/T52 期望值修订 + T54–T61）、P1（ack 分组幂等签名/语义）、P2（ManagedSkillRef、op-derived RevisionId + 完成标记协议 + 资源 receipt、可见谱系 active|stale、pending 四字段 + 互斥）、P3（effectiveThrough 持久化、terminal-recovery、ack 分组、plan 内重复 skillId 冲突）、P4（可见谱系联动）、方案（数据模型四处字段修订 + §0.0 变更记录 + 阶段裁定）与总纲同步。下一步进入 P0 代码实现（`packages/review/session-review` 骨架 + 61 项活跃测试，zero behavior change）。

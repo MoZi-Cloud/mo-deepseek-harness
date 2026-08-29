@@ -1,14 +1,25 @@
-# 自我进化机制方案 RC5.4（唯一所有权 + 可见性分离 + 状态机闭环）
+# 自我进化机制方案 RC5.5（第七轮收口：定位传递 + 幂等协议 + 可见谱系）
 
 > 状态：设计备忘（fork 侧工作文档，登记于 translation-pairing 排除清单）
 >
-> 版本脉络：RC1 → 评审（`评审报告.md`）→ RC4 → 第二轮核验（`RC5-外部建议核验与处置.md`）→ RC5.1 → 第四轮（`RC5.1-评审报告.md` + `RC5.2-第四轮评审核验与处置.md`）→ RC5.2 → 第五轮（`RC5.2评审报告.md` + `RC5.3-第五轮评审核验与处置.md`）→ RC5.3 → 第六轮（`RC5.3-第六轮纠错完善建议.md` + `RC5.4-第六轮评审核验与处置.md`，12 S1 全部证实）→ 本 RC5.4
+> 版本脉络：RC1 → 评审（`评审报告.md`）→ RC4 → 第二轮核验（`RC5-外部建议核验与处置.md`）→ RC5.1 → 第四轮（`RC5.1-评审报告.md` + `RC5.2-第四轮评审核验与处置.md`）→ RC5.2 → 第五轮（`RC5.2评审报告.md` + `RC5.3-第五轮评审核验与处置.md`）→ RC5.3 → 第六轮（`RC5.3-第六轮纠错完善建议.md` + `RC5.4-第六轮评审核验与处置.md`，12 S1 全部证实）→ RC5.4 → 第七轮（`RC5.4-第七轮收口评审.md` + `RC5.5-第七轮评审核验与处置.md`，6 项全部证实）→ 本 RC5.5
 >
-> 函数级规格：`RC5.4-函数级规格总纲.md` + 附件 P0–P4（类名/签名/调用关系/验收标准，TDD）
+> 函数级规格：`RC5.5-函数级规格总纲.md` + 附件 P0–P4（类名/签名/调用关系/验收标准，TDD）
 >
 > 证据基线：upstream master = `cd5ef81`（fork 零代码漂移）；Hermes 锚点 = 本地 clone `05c248d8`（第五轮处置 §5）；证据账本 = 历轮评审/处置文档
 >
+> 阶段裁定（第七轮）：**RC5.4 = 架构批准 / 实现条件批准**——九原则冻结；P0 即刻开工；P1、P2 各带前置修补；P3/P4 冻结纯文档前推，剩余问题改由 REAL composition / crash injection / concurrency injection 在代码中发现
+>
 > 日期：2026-08-29
+
+## 0.0 相对 RC5.4 的增量（第七轮 6 项收口，处置 §1）
+
+1. **定位传递（S1-1）**：任何 API 不裸传 `SkillId`——Store/Authoring/治理一律 `ManagedSkillRef{projectKey, skillId}`；projectKey 由 Service 入口从 `cwd/scope` 解析（同 `resolveMemoryScope` 型），`ResolvedProject` 只做内部中间值不做公共类型。
+2. **revision 身份与资源 receipt（S1-2）**：`ManagedRevisionId = hash(skillId, requestedByOpId)`——并发 op 不共路径、同 op 重放同路径；bundle 写入 = 全量重写 + 完成标记末位 `createIfAbsent`（fs 无 move/delete，部分写入靠重放补全，标记在而 digest 异才是 `invalid_structure`）；`lastAppliedOpId` 在 CAS 中激活，patch 先查重（duplicate-before-stale，与 memory 同型）。
+3. **可见谱系（S1-3）**：provider 可见 = `active | stale`（stale 是归档倒计时不是隐藏态）；隐藏 = `draft | rejected | archived`——否则 stale 的 meaningful-use 复活是死分支（tool-skill 每次调用先 re-list，`tool-skill/src/index.ts:134-136`）。
+4. **pending 四字段（S1-4）**：`pendingRevision{revisionId, contentDigest, catalogSummary, createdByOpId}`，approve 单 record CAS 原子切换；get 的 definition summary 取 candidate 冻结字段（`SkillCandidate extends SkillSummary` 字段齐全），content 取 `locator.revision`。
+5. **ack 分组 + 幂等（S1-5）**：`acknowledgeTerminalOps(scopeGroups)`；语义三分——in pending → 迁移、已在环 → duplicate-ack 成功、两无 → `invalid_structure`；P3 terminal-recovery 先重放 `terminal && !terminalAcked` 再接受新 mutation。
+6. **`effectiveThrough` 持久化（S1-6）**：进 `ReviewAttempt`，LearningView 完成后、planner 前回填；terminal-recovery 唯一推进依据，禁止恢复期重算。
 
 ## 0. 相对 RC5.3 的四组实质变化
 
@@ -36,6 +47,10 @@
 ```text
 ProjectKey（branded）        = hash(ctx.fs.resolve(findProjectRoot(cwd)).targetKey)
 SkillId（branded）           = hash(ProjectKey, normalizedName)——确定性，同名并发天然串行
+ManagedSkillRef（branded）   { projectKey, skillId }——一切 Store/Authoring/治理 API 的定位单位，
+                               禁止裸传 SkillId（单向 hash 无法反推 projectKey，第七轮 S1-1）
+ManagedRevisionId（branded） = hash(skillId, requestedByOpId)——op-derived：并发 op 不共路径，
+                               同 op 重放同路径（第七轮 S1-2）
 ReviewCursor（per-session）  { sessionId, reviewedThroughSeq, desiredThroughSeq, policyVersion,
                                learningViewVersion, rangeId,
                                inFlight? { attemptId, attemptNo, fromExclusive,
@@ -46,7 +61,9 @@ ReviewAttemptId              = hash(rangeId, attemptNo)——attemptNo cursor du
 ReviewAttempt（append-only） { attemptId, attemptNo, status: planning|planned|committing|
                                committed|failed|cancelled, baseStateDigest?, plan?, planDigest?,
                                baseRevisions?, opStates[], attemptCount, lastFailureCode?,
-                               nextRetryAt?, terminalAcked? }——plan 永不可变
+                               nextRetryAt?, terminalAcked?, effectiveThrough? }——plan 永不可变；
+                               effectiveThrough 在 LearningView 完成后、planner 前回填，
+                               terminal-recovery 唯一推进依据（第七轮 S1-6，禁止恢复期重算）
 ReviewPlan（模型数据）       { memory[{ action, target:'project'|'user', targetHint?, content?,
                                kind, evidence[{seq, span?, fieldPath?}], reason, confidence }],
                                skills[{ action:'create-draft'|'patch-draft', skillName,
@@ -60,10 +77,14 @@ CompositeMemorySnapshot      { kind:'memory', form:'snapshot', sections,
                                digest }——一个 producer，P1 只填 project
 ManagedSkillRecord           { projectKey, skillId, name, owner,
                                state: draft|active|stale|archived|rejected,
-                               currentRevision, contentDigest, pendingRevision?{revision,digest},
+                               currentRevision: ManagedRevisionId, contentDigest,
+                               pendingRevision?{ revisionId, contentDigest, catalogSummary,
+                               createdByOpId }——四字段随 approve 单 CAS 原子切换（S1-4），
                                catalogSummary{ name, description, whenToUse?, invocation },
                                revision, createdAt, promotedAt?, stateChangedAt?, staleAt?,
                                archivedAt?, createdByAttemptId?, lastAppliedOpId?, pinned }
+                               ——lastAppliedOpId 在 draft 推进/pending 写入的同一 CAS 内更新，
+                               patch 先查重（duplicate-before-stale，资源 receipt，S1-2）
 NameIndex（per-project）     { projectKey, nameToSkillId }——ensureNameIndex + 单 RMW 原子占位
 ```
 
@@ -72,8 +93,8 @@ NameIndex（per-project）     { projectKey, nameToSkillId }——ensureNameInde
 | 包 | 内容 | Phase | 挂载层 |
 |---|---|---|---|
 | `packages/util/content-scan` | `scanContent()` + `PATTERN_SET_VERSION` + 四语料 | P1 | — |
-| `packages/memory/memory` | **单一** `MemoryService extends Service`（project/user 两逻辑 scope + `acknowledgeTerminalOps`）；composite `MemoryPublisher`（pre-step，fail-open） | P1 | host 组合 |
-| `packages/skill/skill-managed` | **`ManagedSkillService extends Service`**（唯一 domain owner：Store/NameIndex/Provider/AuthoringCore）；named export `skill_manage` 工具插件 | P2 | Service+provider 挂 host cordis.yml（global 层）；工具挂 authoring preset |
+| `packages/memory/memory` | **单一** `MemoryService extends Service`（project/user 两逻辑 scope + `acknowledgeTerminalOps(scopeGroups)`）；composite `MemoryPublisher`（pre-step，fail-open） | P1 | host 组合 |
+| `packages/skill/skill-managed` | **`ManagedSkillService extends Service`**（唯一 domain owner：Store/NameIndex/Provider/AuthoringCore；`ManagedSkillRef` 定位 + op-derived `ManagedRevisionId` + 完成标记协议）；named export `skill_manage` 工具插件 | P2 | Service+provider 挂 host cordis.yml（global 层）；工具挂 authoring preset |
 | `packages/review/session-review` | `ReviewRuntime` + RangeId/Attempt ledger + 两阶段 planner + admission/saga + 治理命令 | P3 | authoring preset（session-query 默认过滤先行） |
 | `packages/skill/skill-curator` | 生命周期状态机（active 谱系）+ live `tools/result` usage | P4 | host 组合 |
 
@@ -81,9 +102,9 @@ NameIndex（per-project）     { projectKey, nameToSkillId }——ensureNameInde
 
 ## 3. 机制要点（细节见附件）
 
-- **memory**（P1）：单 Service 双 scope；发布 = `sanitizeForPublication → buildSnapshotSections（含两 scope 节）→ combined digest → 比对 → 发布 CompositeMemorySnapshot`；receipt 二分 + `acknowledgeTerminalOps`；双闸扫描 + fail-open 不变。
-- **skill-managed**（P2）：`list()` storage-only（sidecar `catalogSummary`；单条损坏 → last-good + `complete:false`）；`get()` = projectKey 校验 → exact revision → 整 bundle digest → 读边界重扫 → definition（summary 取 sidecar、content 取 revision）；create = `checkNameConflict(AuthoringContext) → ensureNameIndex+reserveName → validateStructure → 写 revision → record(draft, catalogSummary)`；patch：draft 直进 currentRevision、active 只进 `pendingRevision`；promote/activate/reject/reopen = 治理面 CAS；配额 fail-loud。
-- **触发与取消**（P3）：三触发模式 + settlement（planning 取消清 inFlight；planned/committing 转 resumable 续 stored plan）——RC5.3 已定，不变。
+- **memory**（P1）：单 Service 双 scope；发布 = `sanitizeForPublication → buildSnapshotSections（含两 scope 节）→ combined digest → 比对 → 发布 CompositeMemorySnapshot`；receipt 二分 + `acknowledgeTerminalOps(scopeGroups)`（幂等三分：pending 迁移 / 已入环 duplicate-ack / 两无 `invalid_structure`，S1-5）；双闸扫描 + fail-open 不变。
+- **skill-managed**（P2）：一切 API 走 `ManagedSkillRef`，禁止裸 `SkillId`；`list()` storage-only、可见谱系 = `active | stale`（S1-3；单条损坏 → last-good + `complete:false`）；`get()` = projectKey 校验 → exact revision → 整 bundle digest → 读边界重扫 → definition（summary/invocation 取 candidate 冻结字段、content 取 `locator.revision`，S1-4）；revision 目录 op-derived（`revisions/<ManagedRevisionId>/`）+ 全量重写 + 完成标记 `createIfAbsent`（S1-2）；create = `checkNameConflict(AuthoringContext) → ensureNameIndex+reserveName → validateStructure → 写 revision → record(draft, catalogSummary, lastAppliedOpId)`；patch 先查重（duplicate-before-stale）、active 且 pending 未决 → `pending_pending_conflict`，draft 直进 currentRevision、active 只进 pendingRevision 四字段；promote/activate/reject/reopen = 治理面 CAS（activatePending 四字段原子切换）；配额 fail-loud。
+- **触发与取消**（P3）：三触发模式 + settlement（planning 取消清 inFlight；planned/committing 转 resumable 续 stored plan）——RC5.3 已定，不变；**terminal-recovery**（S1-5/S1-6）：启动恢复先重放 `status ∈ terminal && !terminalAcked`（幂等 ack → `advance(effectiveThrough)` → 清 inFlight）再接受新 review mutation。
 - **admission + saga**（P3）：whole-plan admission；`stale_base_revision` → 新 attempt replan；`budget_exceeded` → zero commit → consolidation 新 attempt（`maxConsolidationAttempts` 默认 2）→ 仍败 terminal 零 commit；L1 启用 scope = project（ReviewInput/persona 声明）+ `target:'user'` backstop 拒绝（记录 + `target_scope_disabled`）。
 - **治理面**（P3）：宿主命令 list/show/approve/reject/reopen——approve 双语义（draft 上架；active pending 切 pointer），全部全重验后走 Service CAS；模型工具面无任何治理动作。
 - **usage**（P4）：live `ctx.on('tools/result')`——`exec.name==='skill' && !result.isError && result.value?.provider === MANAGED_SKILL_PROVIDER_NAME`，按确定性 `skillId = hash(projectKey, name)` 归属（无需查表）；`/name` 只作聚合遥测；进程内存活期观测，HMR dispose 即止。
@@ -92,7 +113,7 @@ NameIndex（per-project）     { projectKey, nameToSkillId }——ensureNameInde
 
 ## 4. Phase 门槛（P0–P5）
 
-P0 = Evidence Lock 53 活跃 + 2 历史回归（附件 P0）。P1 = 单 Service 双 scope + composite 发布 + receipt 二分 + ack 协议。P2 = skill-managed Service 一步到位（storage-only list、pendingRevision、rejected/reopen、NameIndex ensure、配额、跨层 REAL 枚举）。P3 = review 全链（attempt 简化、consolidation 新 attempt、治理双语义、scope backstop）+ session-query 默认过滤。P4 = curator（active 谱系状态机 + live usage 归属）。P5 = rollout + 指标两拆。
+P0 = Evidence Lock 61 活跃 + 2 历史回归（附件 P0，含第七轮 T54–T61）。P1 = 单 Service 双 scope + composite 发布 + receipt 二分 + ack 分组幂等协议 + terminal-recovery 支撑。P2 = skill-managed Service 一步到位（ManagedSkillRef 定位、storage-only list、visible = active|stale、op-derived RevisionId + 完成标记、资源 receipt、pendingRevision 四字段 + 互斥、rejected/reopen、NameIndex ensure、配额、跨层 REAL 枚举）。P3 = review 全链（attempt 简化、consolidation 新 attempt、治理双语义、scope backstop、effectiveThrough 持久化 + terminal-recovery）+ session-query 默认过滤。P4 = curator（active 谱系状态机 + live usage 归属；stale 可见可复活）。P5 = rollout + 指标两拆。
 
 每 Phase 固定门槛：per-file 100% 覆盖、REAL-composition boot、HMR disposal、snapshot、双 SDK（类型面变更时）、doc-sync、Agent Note。
 
