@@ -10,7 +10,9 @@
 >
 > 第八轮评审处置：`RC5.5.1-第八轮评审核验与处置.md`（6 项全部证实；RC5.5.1 = 开工补丁：SkillAppliedOps 对称 receipt、NameReservation op-aware 占位、deriveOpId 纯派生、applied-only ack 输入、markTerminal(disposition)/markFinalized finalization 协议、仅 consumed 可 advance。阶段裁定 = **Architecture Frozen / Implementation Approved**：P0/P1 即刻，P2 先红 T62/T64/T65，P3 finalization path 前置 T66–T68，停发 RC5.6 式套件）
 >
-> 日期：2026-08-29（RC5.5.1 增补 2026-08-30）
+> RC5.5.2 开工前修补（2026-08-30，无评审轮）：P1 ack 措辞对齐第八轮 S1-4、P3 恢复 Config 表（新 §7）、P2 补 `transitionManagedSkill` 规格、P0 计数更正（68 项 = 66 活跃 + 2 历史回归）、`pinned` L1 无产生点、命名残留清理（方案 §0.0.2）
+>
+> 日期：2026-08-29（RC5.5.1 增补 2026-08-30；RC5.5.2 修补 2026-08-30）
 
 ## 1. 全局约定
 
@@ -68,14 +70,14 @@ session-review.governance（宿主命令：list/show/approve/reject/reopen）
   └─ approve 双语义：draft→active；active pending→四字段 CAS（全重验）
 skill-curator.SkillCurator（runMaintenance）
   ├─ SkillUsageObserver ◄── ctx.on('tools/result')（live；provider 精确归属）
-  └─ SkillAuthoring=ManagedSkillService.transitionManagedSkill（唯一写通道）
+  └─ ManagedSkillService.transitionManagedSkill（唯一写通道；规格见附件 P2 §3）
 ```
 
 ## 4. 阶段函数索引
 
 | 阶段 | 附件 | 规模 | 核心交付 |
 |---|---|---|---|
-| P0 | 附件P0 | 68 活跃 + 2 历史 + Hermes 锚点 | 行为事实钉死（含第七轮 T54–T61、第八轮 T62–T68）+ E0 结案 |
+| P0 | 附件P0 | 68 项（66 活跃 + 2 历史回归）+ Hermes 锚点 | 行为事实钉死（含第七轮 T54–T61、第八轮 T62–T68）+ E0 结案 |
 | P1 | 附件P1 | 1 Service + 1 Publisher + 12 函数 + content-scan | 双 scope 幂等 + receipt 二分/分组幂等 ack + composite 发布 |
 | P2 | 附件P2 | 1 Service（含 Provider/Store/AuthoringCore）+ 12 函数 + 1 工具 | skill-managed 一步到位：ManagedSkillRef + op-derived revision/完成标记 + visible=active\|stale + pending 四字段 + rejected/reopen + 配额 |
 | P3 | 附件P3 | 3 类 + 15 函数 | ReviewRuntime 全链（attempt 简化/consolidation 新 attempt/scope backstop/effectiveThrough + terminal-recovery）+ 治理双语义 + session-query 默认过滤 |

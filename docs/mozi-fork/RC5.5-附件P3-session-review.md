@@ -6,9 +6,9 @@
 >
 > 相对 RC5.4-P3（第七轮收口）：`effectiveThrough` 随 attempt 持久化；applied-only ack；terminal-recovery。
 >
-> 相对 RC5.5-P3（第八轮收口）：**opId 分配 = `deriveOpId` 纯派生**（第八轮 S1-3/T62/T63——`OpId = hash(attemptId, resourceKind, stableOpIndex, canonicalOpDigest)`，模型不提供 opId，恢复重放同 op 同 id）；**ack 输入修正**（S1-4/T66）——`opStates` 升格 `ReviewOpState { opId, resource, resourceRef, state: prepared|applied|duplicate|failed }`，ack 只取 `applied|duplicate`（partial-saga / 零 mutation terminal 不再误报 `invalid_structure`）；**finalization 协议**（S1-5/T67）——`terminalAcked` 改名 `finalized`，定序 `markTerminal(status, rangeDisposition) → ack applied receipts（memory + skill）→ advance（仅 consumed，单调 max-guard）→ markFinalized`，recovery 入口 `terminal && !finalized`；**`RangeDisposition`**（S1-6/T68）——consumed 仅 committed/noChange；stale/budget → superseded；拒绝/瞬态/前台取消 → retryable 背退；manual 预留 L2。**骨架与纯函数先行；finalization commit path 前置 T66–T68 三协议**。
+> 相对 RC5.5-P3（第八轮收口）：**opId 分配 = `deriveOpId` 纯派生**（第八轮 S1-3/T62/T63——`OpId = hash(attemptId, resourceKind, stableOpIndex, canonicalOpDigest)`，模型不提供 opId，恢复重放同 op 同 id）；**ack 输入修正**（S1-4/T66）——`opStates` 升格 `ReviewOpState { opId, resource, resourceRef, state: prepared|applied|duplicate|failed }`，ack 只取 `applied|duplicate`（partial-saga / 零 mutation terminal 不再误报 `invalid_structure`）；**finalization 协议**（S1-5/T67）——`terminalAcked` 改名 `finalized`，定序 `markTerminal(status, rangeDisposition) → ack applied receipts（memory + skill）→ advance（仅 consumed，单调 max-guard）→ markFinalized`，recovery 入口 `terminal && !finalized`；**`RangeDisposition`**（S1-6/T68）——consumed 仅 committed/noChange；stale/budget → superseded；拒绝/瞬态/前台取消 → retryable 背退；manual 预留 L2。**骨架与纯函数先行；finalization commit path 前置 T66–T68 三协议**。RC5.5.2 修补：恢复 Config 表（新 §7——RC5.1-P3 §6 的清单按现行机制重组，全套重写时失落；tunables 必须是 validated Config 字段，总纲 §1）；session-query 与验收门顺延为 §8/§9。
 >
-> 日期：2026-08-29（RC5.5.1 增补 2026-08-30）
+> 日期：2026-08-29（RC5.5.1 增补 2026-08-30；RC5.5.2 修补 2026-08-30）
 
 ## 1. 模块布局
 
@@ -97,10 +97,27 @@ tests/*.spec.ts
 - backstop：admission 命中 `target:'user'`（rollout < L2）→ proposal 落 ledger + **整 plan zero commit** + `target_scope_disabled`；不静默 drop、不降级写 project。
 - 验收：`user-target-backstop-l1`（T53）、`user-target-not-invited-at-l1`（输入侧断言）。
 
-## 7. session-query 默认过滤（上游包 fork 修改）
+## 7. Config（schemastery）
+
+字段全带 JSDoc；除标注默认者外全部 required（无静默默认，总纲 §1）。plan 硬上限 schema 与 host 双层同源取本表（`startPlanner` 验收 `plan-ops-capped-schema`/`plan-ops-capped-host`）。
+
+| 字段 | 语义 |
+|---|---|
+| `triggerMode` | `'resume-async'`（默认）\| `'resume-blocking'` \| `'maintenance'`——触发装配入口 |
+| `reviewProvider` / `reviewModel?` | 子代理 provider（默认 `'spawn'`）/ 可选模型路由 |
+| `maxLearningViewTokens` / `maxReviewOutputTokens` / `maxReviewTotalTokens` | LearningView 预算 / 接线 `agentOptions.maxTokens` / usage 观察累计上限（超限 `run.dispose()`） |
+| `debounceMs` | turn/end 去抖 |
+| `policyVersion` / `learningViewVersion` | 游标与 RangeId 身份参与者（hash 入参） |
+| `persona` | 静态文本（snapshot 钉死；no-op 中性 + `enabledScopes` 声明，S2-4） |
+| `rolloutLevel` | `'shadow'`（默认）\| `'conservative'` \| `'autonomous'`——shadow 下 saga commit 步零 mutation、proposal 全落 ledger、high-water 照常推进 |
+| `maxConsolidationAttempts` | budget consolidation 新 attempt 上限（默认 2） |
+| `maxAttemptsPerRange` / `retryBackoffBaseMs` | retryable 背退上限与基时（超限 failed-terminal） |
+| `maxPlanMemoryOps` / `maxPlanSkillOps` / `maxFilesPerSkill` / `maxFileBytes` / `maxEvidenceRefsPerProposal` / `maxSpanBytes` | plan 六项硬上限（schema + host 双层）与证据上限 |
+
+## 8. session-query 默认过滤（上游包 fork 修改）
 
 `tool-session-query` 未显式 `includeChildSessions: true` 时默认附加 `{kind:'parent', values:[null]}`；`ctx.sessionQuery` 服务不改。验收：`tool-default-root-only`、`tool-explicit-optin`、`host-unfiltered`。
 
-## 8. 验收门（Phase 出口）
+## 9. 验收门（Phase 出口）
 
 附件测试全绿 + 100% 覆盖；REAL boot 全链（双 mock 模型；blocking 顺序、settlement 恢复、planned 崩溃恢复、**finalization 链各边界 crash 注入**、跨资源失败 saga 续完、consolidation 新 attempt、治理双语义 approve/reject/reopen）；snapshot（child 终请求逐字节、persona、schema 拒绝文案）；doc-sync + Agent Note + 双 SDK；Known Limitations：child 继承父 standing prompt 环境、治理为最小宿主命令面、L1 不邀请 user proposal、**首版 crash model = Host/process crash + restart（`fs-local/src/fsio.ts:546-594` staged + atomic rename；不断言 power loss / kernel crash / storage 故障下的分布式事务保证）**、manual disposition 在 L1 无产生点。

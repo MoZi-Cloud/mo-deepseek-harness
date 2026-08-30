@@ -1,12 +1,12 @@
-# RC5.5 附件 P0 — Evidence Lock（行为事实钉死，68 活跃 + 2 历史回归）
+# RC5.5 附件 P0 — Evidence Lock（行为事实钉死，68 项 = 66 活跃 + 2 历史回归）
 
 > 上位：`RC5.5-函数级规格总纲.md`。P0 = **zero behavior change**（允许测试与未来包骨架，不注册生产行为、不改 shipped composition）。
 >
 > 测试落位：`packages/review/session-review/tests/evidence-lock/*.spec.ts`（本阶段创建该包骨架）。
 >
-> 相对 RC5.3-P0：T36 期望值改写（S2-6）；T41 改 live 事件（S1-6）；新增 T42–T53（第六轮处置 §4）。相对 RC5.4-P0：T33/T49/T52 期望值随第七轮修订；新增 T54–T61（第七轮处置 §4）。相对 RC5.5-P0：新增 T62–T68（第八轮处置 §3：opId 派生、create 幂等、skill receipt 对称、applied-only ack、finalization 幂等、disposition 门控 advance）。
+> 相对 RC5.3-P0：T36 期望值改写（S2-6）；T41 改 live 事件（S1-6）；新增 T42–T53（第六轮处置 §4）。相对 RC5.4-P0：T33/T49/T52 期望值随第七轮修订；新增 T54–T61（第七轮处置 §4）。相对 RC5.5-P0：新增 T62–T68（第八轮处置 §3：opId 派生、create 幂等、skill receipt 对称、applied-only ack、finalization 幂等、disposition 门控 advance）。RC5.5.2：计数更正——矩阵 68 项中 T09/T11 为历史回归（活跃 66），验收门措辞同步。
 >
-> 日期：2026-08-29（RC5.5.1 增补 2026-08-30）
+> 日期：2026-08-29（RC5.5.1 增补 2026-08-30；RC5.5.2 修补 2026-08-30）
 
 ## 1. 测试矩阵（T01–T41 承前修订，T42–T53 第六轮新增，T54–T61 第七轮新增，T62–T68 第八轮新增）
 
@@ -98,4 +98,4 @@
 
 ## 4. 验收门
 
-68 项活跃全绿（2 项历史回归记录在案）；E0 全结案回填；`git diff` 仅新增测试与包骨架（zero behavior change）；Agent Note 记录结论与被修正假设（含 T36 期望值改写、T15/T41 durable-vs-live 对照、T54–T61 第七轮六项协议缺口、T62–T68 第八轮 receipt/finalization/disposition 缺口）。
+矩阵 68 项全绿（66 活跃 + T09/T11 两项历史回归）；E0 全结案回填；`git diff` 仅新增测试与包骨架（zero behavior change）；Agent Note 记录结论与被修正假设（含 T36 期望值改写、T15/T41 durable-vs-live 对照、T54–T61 第七轮六项协议缺口、T62–T68 第八轮 receipt/finalization/disposition 缺口）。

@@ -6,7 +6,7 @@
 >
 > 相对 RC5.4-P4（第七轮 S1-3）：provider 可见谱系 = `active | stale`（P2）——stale 保持可发现、可载入，meaningful-use 复活通路闭合；`/name` 人工手势走 pre-step 注入（`tool-skill/src/index.ts:177-199`），不产生 `tools/result` 事件，天然不入 modelLoads 锚点。
 >
-> 前置：P3 全绿。日期：2026-08-29
+> 前置：P3 全绿。日期：2026-08-29（RC5.5.2 修补 2026-08-30：`pinned` L1 无产生点入 Known Limitations；`transitionManagedSkill` 规格落 P2 §3）
 
 ## 1. 模块布局
 
@@ -36,7 +36,7 @@ Transition = { to: 'active'|'stale'|'archived',
 ## 3. 函数规格
 
 #### `transition(record, usage, now, config): Transition | undefined`
-- 职责：纯状态机（record.state 非 active 谱系 → `undefined`，S2-5）。锚点：never-used = `max(promotedAt ?? createdAt, createdAt)`；used = `lastMeaningfulUseAt`；`zeroUseGraceDays`：`now - anchor < zeroUseGraceDays` 的零使用不转；stale → active 需 `lastMeaningfulUseAt > stateChangedAt`；stale → archived 自 `staleAt` ≥ `archiveAfterDays`；`pinned` 不迁移。
+- 职责：纯状态机（record.state 非 active 谱系 → `undefined`，S2-5）。锚点：never-used = `max(promotedAt ?? createdAt, createdAt)`；used = `lastMeaningfulUseAt`；`zeroUseGraceDays`：`now - anchor < zeroUseGraceDays` 的零使用不转；stale → active 需 `lastMeaningfulUseAt > stateChangedAt`；stale → archived 自 `staleAt` ≥ `archiveAfterDays`；`pinned` 不迁移（Service 层同门不可绕过，P2 §3 `transitionManagedSkill`）。
 - 验收：`active-stale-after-days`、`never-used-anchored-at-promotion`、`stale-archived-from-staleAt`、`meaningful-use-revives`、`zero-use-grace-window`、`pinned-never-transitions`、`draft-and-rejected-never-transition`（S2-5）、`boundary-exact`、`no-op-returns-undefined`。
 
 #### `class SkillUsageObserver`（live 事件，S1-6）
@@ -61,4 +61,4 @@ Transition = { to: 'active'|'stale'|'archived',
 
 ## 5. 验收门（Phase 出口）
 
-附件测试全绿 + 100% 覆盖（状态机全迁移 + live 归属决策表 + 故障注入）；REAL boot：curator + skill-managed 全组合（归档→复活→active + 领地零接触持久回归 + human 同名胜出不误计 + draft/rejected 不被自动迁移端到端）；README（Known Limitations：consolidation 默认关、仅 project 自治域、usage 为存活期 best-effort 且 `/name` 不入锚点、无物理清理）+ Agent Note；doc-sync。
+附件测试全绿 + 100% 覆盖（状态机全迁移 + live 归属决策表 + 故障注入）；REAL boot：curator + skill-managed 全组合（归档→复活→active + 领地零接触持久回归 + human 同名胜出不误计 + draft/rejected 不被自动迁移端到端）；README（Known Limitations：consolidation 默认关、仅 project 自治域、usage 为存活期 best-effort 且 `/name` 不入锚点、无物理清理、pinned 在 L1 无产生点（恒 false，L2 用户命令接入））+ Agent Note；doc-sync。

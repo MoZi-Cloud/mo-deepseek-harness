@@ -4,9 +4,9 @@
 >
 > 包：`packages/memory/memory` + `packages/util/content-scan`。前置：P0 全绿。
 >
-> 相对 RC5.3-P1：单一 Service 内部双逻辑 scope（不再双实例组合）；composite Publisher 单消息双节；receipt 二分 + ack 协议；project 身份走 `ctx.fs.resolve().targetKey`。相对 RC5.4-P1（第七轮 S1-5）：`acknowledgeTerminalOps` 改 scope 分组签名且幂等——in pending 迁移、已在环 duplicate-ack 成功、两无 `invalid_structure`。相对 RC5.5-P1（第八轮）：opId 由 P3 `deriveOpId` 纯派生供给（T62/T63）——`HostMemoryOp.opId` 与 `deriveEntryId(opId)` 由此获得跨恢复稳定性，receipt 查重在 crash/recovery 后成立；ack 调用输入来自 P3 的 applied-only `opStates`（第八轮 S1-4），P1 侧签名不变。
+> 相对 RC5.3-P1：单一 Service 内部双逻辑 scope（不再双实例组合）；composite Publisher 单消息双节；receipt 二分 + ack 协议；project 身份走 `ctx.fs.resolve().targetKey`。相对 RC5.4-P1（第七轮 S1-5）：`acknowledgeTerminalOps` 改 scope 分组签名且幂等——in pending 迁移、已在环 duplicate-ack 成功、两无 `invalid_structure`。相对 RC5.5-P1（第八轮）：opId 由 P3 `deriveOpId` 纯派生供给（T62/T63）——`HostMemoryOp.opId` 与 `deriveEntryId(opId)` 由此获得跨恢复稳定性，receipt 查重在 crash/recovery 后成立；ack 调用输入来自 P3 的 applied-only `opStates`（第八轮 S1-4），P1 侧签名不变。RC5.5.2 修补：§3 正文一处残留的"按 plan memory op 分组"措辞更正为 applied-only opStates（与本行一致，消除文件内自相矛盾）。
 >
-> 日期：2026-08-29（RC5.5.1 增补 2026-08-30）
+> 日期：2026-08-29（RC5.5.1 增补 2026-08-30；RC5.5.2 修补 2026-08-30）
 
 ## 1. 模块布局
 
@@ -82,7 +82,7 @@ MemoryConfig = { maxEntries, maxStoredChars, maxEntryChars, maxSnapshotTokens,
 #### `class MemoryService extends Service`（唯一 memory 域 opener，T42）
 - `getState(scope): Promise<MemoryState>` — `ensureInitialized` 后读。
 - `applyOps(scope, ops, expectedBaseRevision): Promise<ApplyOpsResult>` — 单 RMW 闭包：receipt 查重先于 base 检查；写边界扫描（blocked → `threat_scan_blocked`）；折叠提交（新 op 入 pending）。
-- `acknowledgeTerminalOps(groups: readonly TerminalAckGroup[]): Promise<void>` — S1-12 + S1-5：逐组读改写对应 scope 的 appliedOps（`splitReceipts` 幂等三分）；由 session-review 在 attempt 达 terminal 时调用（按 plan memory op 的 target/scope 分组），terminal-recovery 重放时重复调用安全（T58）；ack 缺失 = 过量保留（安全方向），无早 ack 路径（两无 opId 仍 `invalid_structure`）。
+- `acknowledgeTerminalOps(groups: readonly TerminalAckGroup[]): Promise<void>` — S1-12 + S1-5：逐组读改写对应 scope 的 appliedOps（`splitReceipts` 幂等三分）；由 session-review 在 attempt 达 terminal 时调用（分组输入 = `ReviewAttempt.opStates[]` 中 `state ∈ {applied, duplicate}` 的 memory op 按 target/scope 分组——applied-only，非 plan 全量，第八轮 S1-4/T66），terminal-recovery 重放时重复调用安全（T58）；ack 缺失 = 过量保留（安全方向），无早 ack 路径（两无 opId 仍 `invalid_structure`）。
 - 验收：`applyops-first-record-creates`、`applyops-duplicate-before-stale`、`applyops-mixed-duplicate-stale-rejects-whole`、`applyops-scan-blocks-write`、`applyops-atomic-batch`、`applyops-scope-isolation-project-user`（T42 关联）、`schema-version-mismatch-passthrough`、`ack-terminal-ops-moves-receipts`（T52）、`ack-scoped-groups-isolate`、`ack-retry-idempotent`（T58）、`ack-orphan-group-invalid-structure`。
 
 #### `latestPublishedMemory(session): { digest, seq } | undefined`

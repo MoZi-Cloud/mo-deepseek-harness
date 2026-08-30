@@ -1,8 +1,8 @@
-# 自我进化机制方案 RC5.5.1（第七轮收口 + 第八轮开工补丁：receipt 对称 + finalization 协议 + range 处置）
+# 自我进化机制方案 RC5.5.2（第八轮后开工前修补：规格缺口收口，架构零变化）
 
 > 状态：设计备忘（fork 侧工作文档，登记于 translation-pairing 排除清单）
 >
-> 版本脉络：RC1 → 评审（`评审报告.md`）→ RC4 → 第二轮核验（`RC5-外部建议核验与处置.md`）→ RC5.1 → 第四轮（`RC5.1-评审报告.md` + `RC5.2-第四轮评审核验与处置.md`）→ RC5.2 → 第五轮（`RC5.2评审报告.md` + `RC5.3-第五轮评审核验与处置.md`）→ RC5.3 → 第六轮（`RC5.3-第六轮纠错完善建议.md` + `RC5.4-第六轮评审核验与处置.md`，12 S1 全部证实）→ RC5.4 → 第七轮（`RC5.4-第七轮收口评审.md` + `RC5.5-第七轮评审核验与处置.md`，6 项全部证实）→ RC5.5 → 第八轮（`RC5.5-第八轮开工评审.md` + `RC5.5.1-第八轮评审核验与处置.md`，6 项全部证实）→ 本 RC5.5.1
+> 版本脉络：RC1 → 评审（`评审报告.md`）→ RC4 → 第二轮核验（`RC5-外部建议核验与处置.md`）→ RC5.1 → 第四轮（`RC5.1-评审报告.md` + `RC5.2-第四轮评审核验与处置.md`）→ RC5.2 → 第五轮（`RC5.2评审报告.md` + `RC5.3-第五轮评审核验与处置.md`）→ RC5.3 → 第六轮（`RC5.3-第六轮纠错完善建议.md` + `RC5.4-第六轮评审核验与处置.md`，12 S1 全部证实）→ RC5.4 → 第七轮（`RC5.4-第七轮收口评审.md` + `RC5.5-第七轮评审核验与处置.md`，6 项全部证实）→ RC5.5 → 第八轮（`RC5.5-第八轮开工评审.md` + `RC5.5.1-第八轮评审核验与处置.md`，6 项全部证实）→ RC5.5.1 → 开工前自查修补（无独立评审轮——第八轮纪律下的 spec-bug 级原位修订）→ 本 RC5.5.2
 >
 > 函数级规格：`RC5.5-函数级规格总纲.md` + 附件 P0–P4（类名/签名/调用关系/验收标准，TDD）
 >
@@ -10,7 +10,7 @@
 >
 > 阶段裁定（第八轮）：**RC5.5.1 = Architecture Frozen / Implementation Approved**——九原则与包边界冻结；P0/P1 即刻 GO；P2 先红 T62/T64/T65 三组再写 mutation path；P3 骨架与纯函数 GO、finalization commit path 前置 T66–T68 三协议；P4 after P3；P5 按原计划。自此停发 RC5.6 式文档套件：后续发现默认按 bug / invariant test / implementation adjustment 处理，仅当 P0 REAL-composition 反证 DSH API 基础假设时才重开架构。首版 crash model = Host/process crash + restart（`fs-local/src/fsio.ts:546-594` staged + atomic rename），不声称断电/内核崩溃级保证
 >
-> 日期：2026-08-29（RC5.5.1 增补 2026-08-30）
+> 日期：2026-08-29（RC5.5.1 增补 2026-08-30；RC5.5.2 修补 2026-08-30）
 
 ## 0.0 相对 RC5.4 的增量（第七轮 6 项收口，处置 §1）
 
@@ -29,6 +29,17 @@
 4. **ack 输入修正（S1-4，T66）**：ack 权威输入 = `ReviewAttempt.opStates[]` 中 `state ∈ {applied, duplicate}` 的 op（非 plan 全量——partial-saga 与零 mutation terminal 不再误报 `invalid_structure`）；`opStates` 升格正式类型 `ReviewOpState`。
 5. **finalization 协议（S1-5，T67）**：`terminalAcked?` 改名 `finalized`（"字段存在 ≠ 协议存在"再现）；定序 `markTerminal(status, rangeDisposition) → ack applied receipts（memory + skill）→ advance（仅 consumed，单调 max-guard）→ markFinalized`；recovery 入口 `terminal && !finalized`。
 6. **`RangeDisposition`（S1-6，T68，P3 最重 blocker）**：`consumed | superseded | retryable | manual` 随 markTerminal 落账；**仅 consumed 允许 advance(effectiveThrough)**，其余 disposition 恢复时清 inFlight 不推进（下次触发重 claim，宁重审不跳审）。L1 映射修正评审提案：consumed 仅 committed/noChange；stale/budget → superseded；拒绝类（含 admission/policy/planner 瞬态）→ retryable 背退——评审的"policy rejected → consumed"自带"若产品决定不再重试"括号，L1 不采纳：零 commit 拒绝的 range 重审合法（base state 可能已变），advance 即违反 `saga-range-never-skips`；manual 预留 L2。
+
+## 0.0.2 相对 RC5.5.1 的增量（开工前自查修补，六项，全部规格级）
+
+1. **P1 ack 措辞对齐（第八轮 S1-4 残留）**：`RC5.5-附件P1` §3 `acknowledgeTerminalOps` 正文仍写"按 plan memory op 的 target/scope 分组"——即第八轮已证伪并改正的表述，与同文件头部声明自相矛盾；改为 applied-only `opStates` 分组。
+2. **P3 Config 表恢复**：全套重写时 RC5.1-P3 §6 的 Config 清单失落，triggerMode/预算/persona/rolloutLevel 等散落正文无集中表——违反"tunables 必须是 validated Config 字段"与总纲 §1 自身约定；按现行机制重组为 P3 §7。
+3. **`transitionManagedSkill` 补规格**：总纲调用图、本文件 §3、P4 runPass、P2 验收名四处引用而零处有签名（"字段存在 ≠ 协议存在"残留）；补入 P2 §3（单 record CAS + 时间锚点同笔落账 + Service 层 pinned 门）。
+4. **P0 计数更正**：矩阵实为 68 项，其中 T09/T11 为历史回归（活跃 66）；"68 活跃 + 2 历史"的写法合计 70，各处更正为"68 项（66 活跃 + 2 历史回归）"。
+5. **`pinned` L1 无产生点声明**：治理命令面（list/show/approve/reject/reopen）无 pin/unpin，L1 恒 false——照 `manual` disposition 先例声明"L2 预留、L1 无产生点"；Service 层 pinned 门不可绕过（P4 `pinned-user-gate-unbypassable` 语义锚点）。
+6. **命名残留清理**：P2 Config `stagingRootName` → `managedRootName`（staging 概念已随目录方案消亡，该字段实为 revisions 根）；总纲调用图 "SkillAuthoring=" 旧包名标签删除。
+
+架构、数据模型、阶段裁定零变化——按第八轮纪律属 implementation-adjustment 级，不构成新的评审轮次。
 
 ## 0. 相对 RC5.3 的四组实质变化
 
@@ -137,7 +148,7 @@ NameIndex（per-project）     { projectKey, nameToReservation }——ensureName
 
 ## 4. Phase 门槛（P0–P5）
 
-P0 = Evidence Lock 68 活跃 + 2 历史回归（附件 P0，含第七轮 T54–T61、第八轮 T62–T68）。P1 = 单 Service 双 scope + composite 发布 + receipt 二分 + ack 分组幂等协议（opId 由 deriveOpId 供给）。P2 = skill-managed Service 一步到位（ManagedSkillRef 定位、storage-only list、visible = active|stale、op-derived RevisionId + 完成标记、**SkillAppliedOps 资源 receipt + NameReservation op-aware 占位**、pendingRevision 四字段 + 互斥、rejected/reopen、NameIndex ensure、配额、跨层 REAL 枚举）；**先红 T62/T64/T65 三组再写 mutation path**。P3 = review 全链（attempt 简化、consolidation 新 attempt、治理双语义、scope backstop、effectiveThrough 持久化、deriveOpId + ReviewOpState + markTerminal(disposition)/markFinalized finalization 协议）+ session-query 默认过滤；**骨架/纯函数先行，finalization commit path 前置 T66–T68**。P4 = curator（active 谱系状态机 + live usage 归属；stale 可见可复活）。P5 = rollout + 指标两拆。
+P0 = Evidence Lock 68 项（66 活跃 + 2 历史回归；附件 P0，含第七轮 T54–T61、第八轮 T62–T68）。P1 = 单 Service 双 scope + composite 发布 + receipt 二分 + ack 分组幂等协议（opId 由 deriveOpId 供给）。P2 = skill-managed Service 一步到位（ManagedSkillRef 定位、storage-only list、visible = active|stale、op-derived RevisionId + 完成标记、**SkillAppliedOps 资源 receipt + NameReservation op-aware 占位**、pendingRevision 四字段 + 互斥、rejected/reopen、NameIndex ensure、配额、跨层 REAL 枚举）；**先红 T62/T64/T65 三组再写 mutation path**。P3 = review 全链（attempt 简化、consolidation 新 attempt、治理双语义、scope backstop、effectiveThrough 持久化、deriveOpId + ReviewOpState + markTerminal(disposition)/markFinalized finalization 协议）+ session-query 默认过滤；**骨架/纯函数先行，finalization commit path 前置 T66–T68**。P4 = curator（active 谱系状态机 + live usage 归属；stale 可见可复活）。P5 = rollout + 指标两拆。
 
 每 Phase 固定门槛：per-file 100% 覆盖、REAL-composition boot、HMR disposal、snapshot、双 SDK（类型面变更时）、doc-sync、Agent Note。
 
