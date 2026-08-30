@@ -413,6 +413,8 @@
       "@deepseek-ai/dsh-session-query-sqlite/invariant": ["./packages/session-query/session-query-sqlite/src/invariant.ts"],
       "@deepseek-ai/dsh-session-reference": ["./packages/context/session-reference/src"],
       "@deepseek-ai/dsh-session-reference/invariant": ["./packages/context/session-reference/src/invariant.ts"],
+      "@deepseek-ai/dsh-session-review": ["./packages/review/session-review/src"],
+      "@deepseek-ai/dsh-session-review/invariant": ["./packages/review/session-review/src/invariant.ts"],
       "@deepseek-ai/dsh-session-snapshot": ["./packages/test-support/session-snapshot/src"],
       "@deepseek-ai/dsh-session-snapshot/invariant": ["./packages/test-support/session-snapshot/src/invariant.ts"],
       "@deepseek-ai/dsh-session-stats": ["./packages/session/session-stats/src"],
