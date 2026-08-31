@@ -96,6 +96,8 @@
 
 总纲 §7 的 12 项随对应 T 结案回填（T42→E0 双面注入形态关联、T41→E0-11、T45→E0-7/12、T34→E0-8 等）。结案与 RC5.4 假设不符时，先修订总纲/附件签名再进 P1。
 
+**结案完成（2026-08-31）**：12 项全部回填进总纲 §7（各项标注结案用例号与结论）。实测与 RC5.4/RC5.5 假设零冲突，未触发签名修订；三处精化随结论落档——E0-3 终态联合本 build 恰五成员（merge-extensible）；E0-10 模型可见 catalog 行恰 `{name, description}` 而 sidecar `catalogSummary` 取 candidate 全字段集（两层不混）；E0-11 live 归属判据 `result.value?.provider` 中 stock 人工 provider 名为 `'filesystem'`。
+
 ## 4. 验收门
 
 矩阵 68 项全绿（66 活跃 + T09/T11 两项历史回归）；E0 全结案回填；`git diff` 仅新增测试与包骨架（zero behavior change）；Agent Note 记录结论与被修正假设（含 T36 期望值改写、T15/T41 durable-vs-live 对照、T54–T61 第七轮六项协议缺口、T62–T68 第八轮 receipt/finalization/disposition 缺口）。

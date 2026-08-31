@@ -110,20 +110,22 @@ skill-curator.SkillCurator（runMaintenance）
 | `target_scope_disabled` | session-review admission backstop | L1 命中 `target:'user'`（记录 + 整 plan zero commit；不静默不降级） |
 | `missing-key` / `version-mismatch` / `already-open` | storageDomain/既有错误**原样透传** | 首录未初始化 / 版本不匹配 / 域重复打开（唯一所有权违约即刻暴露） |
 
-## 7. E0 证据待锁项（写对应函数前结案）
+## 7. E0 证据待锁项（已随 P0 Evidence Lock 全部结案，2026-08-31）
 
-1. storageDomain 读 API 精确签名（get/put/update；missing-key/put 覆盖语义已证，T24 复核）；
-2. 携带 Service 的包如何同时声明 Config 与 pre-step 监听（对照 schedule/goal 挂载形态）；
-3. `SubagentStopReason` 完整联合与 `SubagentRun.result` 形状（已证部分：`types.ts:215-217,236-252,263-268`）；
-4. `session/event` 监听 payload（`agent-instructions/src/index.ts:305` 用法在案）；
-5. `dsh-brand` 导出名与 `Branded<B>` 用法；
-6. `PreStepDecision` 构造（`time-context` 用法在案）；
-7. `findProjectRoot`（`skill-filesystem` :937-947）与 `ctx.fs.resolve` 的组合调用序（P0 T-新增）；
-8. 自定义 Provider `invalidate()` 到下一次 `ctx.skills.list()` 的可见性时序（T26）；
-9. skill-managed 双面（Service default export + 工具 named export）跨层注入形态：preset 层插件 `inject:['skillManaged']` 解析 host 层 Service 的路径（对照 acp/boot 先例）；
-10. managed frontmatter 解析面（`metadata`/`whenToUse` 进 `catalogSummary` 的字段集，P2 结构验证一并钉）；
-11. **`ToolExecutionResult` 精确形状**（live 归属判据 `result.value?.provider` 的字段路径，`core/tools/src/index.ts:193-198,290` 区域）；
-12. **非 local filesystem backend 的 `ctx.fs.resolve().targetKey` 语义**（仅 local realpath 语义在案；远端身份稳定性结案前 ProjectKey 仅支持 local backend，否则 fail-loud）。
+逐项结论由 `packages/review/session-review/tests/evidence-lock/` 实测钉死（用例号 = 附件P0 矩阵行）；全部与 RC5.4/RC5.5 假设一致，无需修订任何签名。
+
+1. **已结案（T07/T20/T24/T44）**：`KvTable` 读 API = `get(key): V | undefined`（内存快照同步读）、`put(key, value): Promise<void>`（insert-or-overwrite，无 compare-and-put）、`update(key, fn): Promise<V>`（写链单穿串行原子 RMW；缺 key 抛 `DomainError 'missing-key'`）、`delete(key): Promise<boolean>`；初始化协议 = get→缺则 put→update；重开 version 不符抛 `version-mismatch`，域名双开抛 `already-open`（同 facility DomainError，跨 facility 裸 Error）。
+2. **已结案（compaction-basic / goal-round-driver 先例，T16/T21 佐证）**：模块面声明 `Config` 接口 + schemastery `Config` schema；Service 构造器内 `resolveConfig(config)` 解析校验（`compaction-basic/src/index.ts:126-129`），再由 Service 注册 `ctx.on('agent/pre-step', async ({agent, messages, turn, step, signal}, next) => PreStepDecision)`（`compaction-basic:147`、`goal-round-driver:349`）；misconfig 在 load 时 fail-loud（`jobs/src/index.ts:66`）。
+3. **已结案（T03/T12/T31）**：`SubagentStopReason` 本 build 恰五成员 `'completed' | 'aborted' | 'error' | 'max-tokens' | 'refusal'`（merge-extensible，host typecheck 拒错拼）；`SubagentResult = { output, stopReason, diagnostic?, structured? }`——`structured` 仅 schema 满足的 capture 存在，否则 absent 且 stopReason 落 `'error'`；`dispose()` 幂等且使 in-flight result 以 `'aborted'` 结算。
+4. **已结案（T22）**：`ctx.on('session/event', (session, event) => …)` 在事件已提交后投递（回调内 `session.events` 已含该 seq）、seq 单调、loop 事件序 `turn/start → step/start → step/end → turn/end`，`turn/end` 携 `{turn, reason:{kind}}` 并收口 durable log。
+5. **已结案（`packages/util/brand/src/index.ts`）**：`dsh-brand` 唯一导出 `export type Branded<B extends string>`（纯类型，零运行时）；具体 id 工厂归属主包（`SessionId` dsh-session、`ToolCallId` dsh-llm、`JobId` dsh-jobs、`FsTargetKey`/`FsVersion` dsh-fs），包内 plain cast 构造。
+6. **已结案（T16/T21 + `agent/src/runtime-types.ts:56-62,238`）**：`PreStepDecision = { kind:'reject' } | { kind:'enter', messages: UserMessage[], startsRequestSeries?: true }`；waterfall payload = `{ agent, messages, turn, step, signal }`；base enter 在 claimed 消息上追加 projected context（`agent-loop/src/agent.ts:243-247`）；监听可 await 延迟整步或 reject（无模型请求，turn 以 reject 收口）。
+7. **已结案（T45 + `skill-filesystem/src/index.ts:937-947`）**：`findProjectRoot(cwd, fs)` 逐级上溯找最近 `.git` 祖先，候选路径全部经挂载 FileSystem 的 `fs.resolve` 探测（`pathExistsInFileSystem`），到根未中回落 cwd；组合调用序 = `findProjectRoot(cwd, ctx.fs)` → `ctx.fs.resolve(projectRoot).targetKey` → sha256 整键 → ProjectKey。
+8. **已结案（T26/T34）**：`control.invalidate()` 即刻 bump revision、清缓存 catalog、恰发一次 `skills/change`——下一次 `list()`/`get()` 即见新状态；provider dispose 后 invalidate 变惰性（无通知）；`get` 与调用方 signal 竞速，不配合的 provider 无法挂死加载。
+9. **已结案（T42 + tool-goal/acp 先例）**：跨层注入 = 工具面包模块导出 `export const name` / `export const inject: string[]`（`tool-goal/src/index.ts:22-23` `inject = ['agents','goals','tools','systemPrompt']`）+ Config schema + `export function apply(ctx, config)`；loader 将 host 层 Service 名解析进 apply 作用域，apply 期间捕获实例、回调内不惰性取（`acp/src/index.ts:61,97-98`）；skill-managed 照此 `inject:['skillManaged']`；Service 同名重复注册在注册时抛错即暴露（T42）。
+10. **已结案（T16/T34/T61 + `skill/src/index.ts:56-77`）**：`SkillSummary = { name, description, whenToUse?, invocation, source, provider, resourceBase? }`，candidate 增 `rank/locator/path?/metadata?`（`metadata` 为 provider 侧 frontmatter 解析产物，非 SkillSummary 成员、永不模型可见）；模型可见 catalog 行恰 `{name, description}`（description 定长截断，`tool-skill:40,50-56`）；sidecar `catalogSummary` 取 candidate 全字段集（P2 附件 ：66），`whenToUse` 为其中 typed 可选成员；managed frontmatter 具体字段集仍由 P2 `validateStructure` 钉。
+11. **已结案（T15/T41）**：live `tools/result` 监听签名 `(exec, result)`，`exec` 冻结、每调用恰一条；归属判据字段路径 = `result.value?.provider`（`value` 为胜出工具返回值，skill 工具返回值携带 `provider`；stock 人工 provider 名为 `'filesystem'`）；durable `tool/result` 事件 data 恰 `{turn, step, message, error?, meta?}`——无 name/value/provider，exec 身份仅经 `tool/call` callId 配对恢复，`isError` 在 content block 上。
+12. **已结案（T45，约束照旧）**：仅 local backend 的 `targetKey` 语义已证——别名/符号链接同根 → 同 key（最近祖先 realpath 身份，尚不存在的文件亦然），异文件异 key；远端 backend 身份稳定性仍无证据，**ProjectKey 在其结案前仅支持 local backend，否则 fail-loud**（P2 实施时按此守门）。
 
 ## 8. P5 — Rollout 与 effectiveness（两拆）
 
