@@ -60,6 +60,7 @@ harness 由 `packages/` 下的 npm 包组装而成，按能力系列分组：会
 | [`preset/`](preset/README.zh.md) | 由 preset `cordis.yml` 按会话组装 agent |
 | [`guard/`](guard/README.zh.md) | 循环卫生守卫：建议性重复调用提醒 + `tools/execute` 截止时间强制执行器 |
 | [`review/`](review/README.zh.md) | 会话评审家族：把已完成会话区间沉淀为记忆与受管技能（骨架） |
+| [`memory/`](memory/README.zh.md) | 持久记忆能力：按作用域的记忆，带防重放回执与 composite snapshot 发布 |
 | [`bundle/`](bundle/README.zh.md) | 可安装的 `dsh --profile` 补丁层 |
 | [`extensions/`](extensions/README.zh.md) | agent 运行时自修改：实时插件/服务检查与模型所写挂载/卸载 |
 | [`hooks/`](hooks/README.zh.md) | 钩子桥接 + 共享的 Claude Code / Codex 线协议库 |

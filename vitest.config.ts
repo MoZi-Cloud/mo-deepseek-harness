@@ -336,6 +336,10 @@ export default defineConfig({
         'packages/interaction/commands/src/index.ts',
         'packages/interaction/commands/src/invariant.ts',
         'packages/session/session-projection/src/index.ts',
+        // Pure re-export barrel over the domain spec and fold layer; the
+        // Service/Publisher assembly that will own executable statements
+        // mounts in this same index (P1 批C) and stays covered there.
+        'packages/memory/memory/src/index.ts',
         ...windowsUnsupportedCoveragePackages.map(path => `${path}/src/**/*.ts`),
         ...windowsOnlyCoverageExclusions,
         ...windowsRunnerCoverageExclusions,

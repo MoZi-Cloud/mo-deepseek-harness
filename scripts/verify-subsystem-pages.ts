@@ -20,6 +20,7 @@ export const GROUPS_WITHOUT_SUBSYSTEM_PAGE: Readonly<Record<string, string>> = {
   bundle: 'Composition patch carriers whose mounted packages own all runtime contracts.',
   examples: 'Non-product demonstration compositions whose mounted packages own all runtime contracts.',
   hooks: 'External hook-protocol bridges over existing interception points, not a new Harness service.',
+  memory: 'Contract-layer library for durable memory state and publication functions; its runtime Service and Publisher are not mounted yet.',
   review: 'P0 test skeleton pinning cross-package behavior facts; no runtime subsystem exists yet, so the package README owns its contract and plan links.',
   sdk: 'Out-of-process protocol and client packages whose package READMEs own the SDK contracts.',
   util: 'Low-level primitives whose business semantics remain with their consuming subsystems.',
