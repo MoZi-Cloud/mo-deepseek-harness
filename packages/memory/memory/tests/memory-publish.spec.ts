@@ -18,6 +18,7 @@ import {
   type MemoryConfig,
   type MemoryEntry,
   type MemoryScope,
+  type OpId,
 } from '@deepseek-ai/dsh-memory'
 
 const CONFIG: MemoryConfig = {
@@ -32,13 +33,14 @@ const CONFIG: MemoryConfig = {
 const PROJECT: MemoryScope = { kind: 'project', projectKey: asProjectKey('p'.repeat(64)) }
 const USER: MemoryScope = { kind: 'user' }
 
-function entry(id: string, content: string): MemoryEntry {
+function entry(rawOpId: string, content: string): MemoryEntry {
+  const opId = rawOpId as OpId
   return {
-    id: deriveEntryId(id),
+    id: deriveEntryId(opId),
     content,
     createdAt: 1_000,
     updatedAt: 1_000,
-    lastAppliedOpId: id,
+    lastAppliedOpId: opId,
   }
 }
 

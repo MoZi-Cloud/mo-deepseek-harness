@@ -30,6 +30,7 @@ tests/corpus/       # positive / benign / 中文改写 / code-block-vs-imperativ
 ```text
 MemoryScope = { kind:'project', projectKey: ProjectKey } | { kind:'user' }
 MemoryEntryId = Branded<string,'MemoryEntryId'>
+OpId = Branded<'OpId'>          // 跨 memory/skill/review 资源边界 opaque；deriveOpId（P3）纯派生供给
 HostMemoryOp = { opId, entryId, now, action:'add'|'update'|'remove', content?, kind?, evidence? }
 AppliedOpReceipts = { pendingReceipts: OpReceipt[],       // non-terminal attempt 的 op，永不 FIFO
                       recentTerminalReceipts: BoundedRing // terminal ack 后入环，仅此区可 GC

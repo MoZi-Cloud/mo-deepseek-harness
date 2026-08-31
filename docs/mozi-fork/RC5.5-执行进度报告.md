@@ -48,7 +48,7 @@
 
 - `00e6658986`：`src/types.ts`（仅类型，附件P1 §2 全量契约）+ `src/domain.ts`（memory domain spec `schemaVersion:1` + zod 记录 + receipt 二分）+ `src/fold.ts` 纯函数组（`deriveEntryId`/`enforceBudget`/`foldMemoryOps`/`splitReceipts`/`sanitizeForPublication`/`buildSnapshotSections`/`computeCompositeDigest`/`buildCompositeSnapshot`）+ `src/index.ts`（当前**仅 re-export**，运行时装配属批C）+ 单测（`tests/memory-fold.spec.ts` + `tests/memory-publish.spec.ts`，覆盖全部纯函数验收名）+ 包注册面（tsconfig.base paths、tsconfig.host 引用、vitest.config、README 三件套、verify 门）。
 - 语义对照 P0 参照实现（`review-protocol.ts` 的 MemoryOps/TERMINAL_RING_CAPACITY），签名与记录按附件P1 全量契约（参照是简化版，仅存测试树，不得晋升生产代码）。
-- 规格缺口记录（批C 前处置，见 §4.1）：`OpId` 现为裸 `string`（`src/types.ts:31`）——附件P1 §2 未钉 branded、P0 参照实现同为裸 string，故非违规而是**规格未钉**；按仓库"跨边界 opaque id 必须 branded"总规则，OpId 跨 memory/skill/review 三资源边界，应在批C 一次性钉成 `Branded<'OpId'>` 并同步规格。
+- 规格缺口记录：批B 落地时 `OpId` 为裸 `string`（附件P1 §2 未钉 branded、P0 参照实现同为裸 string，故非违规而是规格未钉）；批C 前置补账已钉 `Branded<'OpId'>`（`src/types.ts`），附件P1 §2 同步补行，P3 `deriveOpId` 须返回该 branded 类型。
 - 注意：本批为批内中间提交，按 §1 规则 2 协议，阶段验收（完整门槛）在 P1 收尾批统一走（§4.3）。
 
 ## 4. 下一步工作（接手人从这里开始）
@@ -57,7 +57,7 @@
 
 1. **本文件 §3 台账回填**（本条即完成项，提交即闭环）。
 2. **Agent Note**：memory 批B 属非平凡变更，双语 Agent Note 排入 P1 收尾批（§4.3）——不能跨批遗忘；批C 完成时若批B note 仍未落，与批C 同批补交。
-3. **OpId 钉 branded**：`src/types.ts` 改 `export type OpId = Branded<'OpId'>`（纯类型、零运行时）；`deriveEntryId` 入参/`HostMemoryOp.opId`/receipt/ack 输入面同步；附件P1 §2 原位补一行 `OpId = Branded<'OpId'>`；P3 `deriveOpId` 返回该 branded 类型。若拖到 P3，P2 skill-managed 会先带裸 string 跨包边界。
+3. **OpId 钉 branded**（已落地）：`src/types.ts` 现为 `export type OpId = Branded<'OpId'>`（纯类型、零运行时）；`deriveEntryId` 入参/`HostMemoryOp.opId`/receipt/ack 输入面随类型同步；附件P1 §2 已补行 `OpId = Branded<'OpId'>`；**遗留：P3 `deriveOpId` 必须返回该 branded 类型（P3 验收前核对）**。
 
 ### 4.2 P1 批C：MemoryService + MemoryPublisher + 装配
 

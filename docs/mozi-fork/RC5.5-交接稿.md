@@ -37,7 +37,7 @@
 **先做（进度报告 §4.1 前置补账）**：
 1. 进度报告 §3/§4 已回填（2026-08-31 17:56 +0800 之后）；接手时核对 §3 台账与 HEAD 一致。
 2. **Agent Note**：memory 批B 属非平凡变更，双语 Agent Note 排入 P1 收尾批（进度报告 §4.3）——不能跨批遗忘。
-3. **OpId 钉 branded**：`packages/memory/memory/src/types.ts:31` 现为裸 `OpId = string`。定性：附件P1 §2 未钉 branded、P0 参照实现（`review-protocol.ts:36`）同为裸 string，故**非违规而是规格未钉**；但 OpId 跨 memory/skill/review 三资源边界，按仓库"跨边界 opaque id 必须 branded"总规则应在批C 一次性钉成 `Branded<'OpId'>`（纯类型零运行时）并同步附件P1 §2；P3 `deriveOpId` 返回该 branded 类型。拖到 P3 会让 P2 先带裸 string 跨包边界。
+3. ~~OpId 钉 branded~~ **已落地**：`packages/memory/memory/src/types.ts` 现为 `OpId = Branded<'OpId'>`（纯类型零运行时），附件P1 §2 已同步补行。**遗留：P3 `deriveOpId` 必须返回该 branded 类型（P3 验收前核对）。**
 
 **然后（进度报告 §4.2 批C，TDD 按附件P1 §3 验收名）**：
 - `MemoryService extends Service`（唯一 memory 域 opener，T42 语义；`getState`/`applyOps` 单 RMW 闭包：receipt 查重先于 base 检查 → 写边界 `scanContent` 闸（blocked → `threat_scan_blocked`）→ 折叠提交；`acknowledgeTerminalOps` 幂等三分）

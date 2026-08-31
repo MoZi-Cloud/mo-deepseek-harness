@@ -7,16 +7,16 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  MEMORY_DOMAIN_NAME,
-  MEMORY_DOMAIN_VERSION,
-  MemoryError,
   asProjectKey,
   deriveEntryId,
   enforceBudget,
   foldMemoryOps,
   initialMemoryState,
   memoryDomain,
+  MEMORY_DOMAIN_NAME,
+  MEMORY_DOMAIN_VERSION,
   memoryStateSchema,
+  MemoryError,
   scopeKeyOf,
   splitReceipts,
   canonicalOpDigest,
@@ -35,9 +35,15 @@ const CONFIG: MemoryConfig = {
   receiptWindowSize: 4,
 }
 
+/** Test-side cast for op ids minted in this file; production never mints one. */
+function opId(raw: string): OpId {
+  return raw as OpId
+}
+
 /** Host-authoritative op construction: entryId derived from opId, host clock. */
-function op(opId: OpId, action: HostMemoryOp['action'], fields: Partial<HostMemoryOp> = {}): HostMemoryOp {
-  return { opId, entryId: deriveEntryId(opId), now: 1_000, action, ...fields }
+function op(rawOpId: string, action: HostMemoryOp['action'], fields: Partial<HostMemoryOp> = {}): HostMemoryOp {
+  const id = opId(rawOpId)
+  return { opId: id, entryId: deriveEntryId(id), now: 1_000, action, ...fields }
 }
 
 function folded(state: MemoryState, ops: HostMemoryOp[]): MemoryState {
@@ -47,11 +53,11 @@ function folded(state: MemoryState, ops: HostMemoryOp[]): MemoryState {
 describe('memory domain declaration', () => {
   it('declares the memory domain at version 1 with one state table', () => {
     expect(memoryDomain.name).toBe(MEMORY_DOMAIN_NAME)
-    expect(MEMORY_DOMAIN_VERSION).toBe(1)
+    expect(memoryDomain.version).toBe(MEMORY_DOMAIN_VERSION)
     expect(Object.keys(memoryDomain.tables)).toEqual(['state'])
   })
 
-  it('maps scopes to stable record keys and hashes to project keys', () => {
+  it('maps scope to key without parsing the key back', () => {
     const projectKey = asProjectKey('a'.repeat(64))
     expect(scopeKeyOf({ kind: 'project', projectKey })).toBe(`project/${projectKey}`)
     expect(scopeKeyOf({ kind: 'user' })).toBe('user')
@@ -67,11 +73,11 @@ describe('memory domain declaration', () => {
 
 describe('deriveEntryId', () => {
   it('derive-deterministic: the same op id derives the same entry id', () => {
-    expect(deriveEntryId('op-1')).toBe(deriveEntryId('op-1'))
+    expect(deriveEntryId(opId('op-1'))).toBe(deriveEntryId(opId('op-1')))
   })
 
   it('derive-distinct-ops-distinct-ids: distinct op ids derive distinct entry ids', () => {
-    expect(deriveEntryId('op-1')).not.toBe(deriveEntryId('op-2'))
+    expect(deriveEntryId(opId('op-1'))).not.toBe(deriveEntryId(opId('op-2')))
   })
 })
 
@@ -85,11 +91,11 @@ describe('enforceBudget', () => {
     const state: MemoryState = {
       ...initialMemoryState(),
       entries: [{
-        id: deriveEntryId('op-1'),
+        id: deriveEntryId(opId('op-1')),
         content: 'x'.repeat(51),
         createdAt: 1_000,
         updatedAt: 1_000,
-        lastAppliedOpId: 'op-1',
+        lastAppliedOpId: opId('op-1'),
       }],
     }
     expect(() => { enforceBudget(state, CONFIG) }).toThrow(MemoryError)
@@ -104,7 +110,7 @@ describe('enforceBudget', () => {
   it('budget-remove-exempt: removal is admitted at the entry bound', () => {
     const state = folded(initialMemoryState(), [1, 2, 3, 4].map(n => op(`op-${n}`, 'add', { content: 'fact' })))
     expect(() => { enforceBudget(state, CONFIG) }).not.toThrow()
-    const removed = folded(state, [op('op-5', 'remove', { entryId: deriveEntryId('op-1') })])
+    const removed = folded(state, [op('op-5', 'remove', { entryId: deriveEntryId(opId('op-1')) })])
     expect(removed.entries).toHaveLength(3)
     expect(() => { enforceBudget(removed, CONFIG) }).not.toThrow()
   })
@@ -125,20 +131,20 @@ describe('enforceBudget', () => {
 
 describe('foldMemoryOps', () => {
   it('fold-add-update-remove: applies the three actions in one batch', () => {
-    const target = { entryId: deriveEntryId('op-1') }
+    const target = { entryId: deriveEntryId(opId('op-1')) }
     const first = folded(initialMemoryState(), [
       op('op-1', 'add', { content: 'v1', kind: 'tooling', evidence: 'session 1' }),
       op('op-2', 'update', { ...target, content: 'v2', kind: 'process', evidence: 'session 2' }),
     ])
     expect(first.entries).toHaveLength(1)
     expect(first.entries[0]).toEqual({
-      id: deriveEntryId('op-1'),
+      id: deriveEntryId(opId('op-1')),
       content: 'v2',
       kind: 'process',
       evidence: 'session 2',
       createdAt: 1_000,
       updatedAt: 1_000,
-      lastAppliedOpId: 'op-2',
+      lastAppliedOpId: opId('op-2'),
     })
     expect(first.revision).toBe(1)
 
@@ -150,13 +156,13 @@ describe('foldMemoryOps', () => {
   it('fold-new-op-goes-pending: every newly applied op lands in pendingReceipts first', () => {
     const state = folded(initialMemoryState(), [op('op-1', 'add', { content: 'fact' })])
     expect(state.appliedOps.pendingReceipts).toEqual([
-      { opId: 'op-1', resultDigest: canonicalOpDigest(op('op-1', 'add', { content: 'fact' })) },
+      { opId: opId('op-1'), resultDigest: canonicalOpDigest(op('op-1', 'add', { content: 'fact' })) },
     ])
     expect(state.appliedOps.recentTerminalReceipts).toEqual([])
   })
 
   it('fold-duplicate-before-base-check: a replayed op is a duplicate even when its entry is gone', () => {
-    const target = { entryId: deriveEntryId('op-1') }
+    const target = { entryId: deriveEntryId(opId('op-1')) }
     const state = folded(initialMemoryState(), [
       op('op-1', 'add', { content: 'fact' }),
       op('op-2', 'update', { ...target, content: 'fact v2' }),
@@ -166,7 +172,7 @@ describe('foldMemoryOps', () => {
 
     const { results, nextState } = foldMemoryOps(state, [op('op-2', 'update', { ...target, content: 'fact v2' })], CONFIG)
     expect(results).toEqual([
-      { opId: 'op-2', status: 'duplicate', resultDigest: canonicalOpDigest(op('op-2', 'update', { ...target, content: 'fact v2' })) },
+      { opId: opId('op-2'), status: 'duplicate', resultDigest: canonicalOpDigest(op('op-2', 'update', { ...target, content: 'fact v2' })) },
     ])
     expect(nextState).toEqual(state)
   })
@@ -177,18 +183,18 @@ describe('foldMemoryOps', () => {
     state = folded(state, [op('op-2', 'add', { content: 'other' })])
 
     const replayed = foldMemoryOps(state, [op('op-1', 'add', { content: 'original' })], CONFIG)
-    expect(replayed.results[0]).toEqual({ opId: 'op-1', status: 'duplicate', resultDigest: originalDigest })
+    expect(replayed.results[0]).toEqual({ opId: opId('op-1'), status: 'duplicate', resultDigest: originalDigest })
   })
 
   it('detects duplicates through the terminal ring after an ack', () => {
     const state = folded(initialMemoryState(), [op('op-1', 'add', { content: 'fact' })])
     const acked: MemoryState = {
       ...state,
-      appliedOps: splitReceipts(state.appliedOps, ['op-1'], CONFIG.receiptWindowSize),
+      appliedOps: splitReceipts(state.appliedOps, [opId('op-1')], CONFIG.receiptWindowSize),
     }
     const replayed = foldMemoryOps(acked, [op('op-1', 'add', { content: 'fact' })], CONFIG)
     expect(replayed.results[0]).toEqual({
-      opId: 'op-1',
+      opId: opId('op-1'),
       status: 'duplicate',
       resultDigest: canonicalOpDigest(op('op-1', 'add', { content: 'fact' })),
     })
@@ -197,16 +203,16 @@ describe('foldMemoryOps', () => {
   it('an add without content stores empty content; an update without fields keeps prior values', () => {
     const state = folded(initialMemoryState(), [
       op('op-1', 'add', { kind: 'tooling', evidence: 'session 1' }),
-      op('op-2', 'update', { entryId: deriveEntryId('op-1'), now: 2_000 }),
+      op('op-2', 'update', { entryId: deriveEntryId(opId('op-1')), now: 2_000 }),
     ])
     expect(state.entries[0]).toEqual({
-      id: deriveEntryId('op-1'),
+      id: deriveEntryId(opId('op-1')),
       content: '',
       kind: 'tooling',
       evidence: 'session 1',
       createdAt: 1_000,
       updatedAt: 2_000,
-      lastAppliedOpId: 'op-2',
+      lastAppliedOpId: opId('op-2'),
     })
   })
 
@@ -231,7 +237,7 @@ describe('foldMemoryOps', () => {
 
   it('rejects an add whose derived entry already exists', () => {
     const state = folded(initialMemoryState(), [op('op-1', 'add', { content: 'fact' })])
-    expect(() => folded(state, [op('op-9', 'add', { entryId: deriveEntryId('op-1'), content: 'fact' })]))
+    expect(() => folded(state, [op('op-9', 'add', { entryId: deriveEntryId(opId('op-1')), content: 'fact' })]))
       .toThrow(/add op-9 collides with existing entry/)
   })
 
@@ -250,15 +256,15 @@ describe('foldMemoryOps', () => {
 describe('splitReceipts', () => {
   it('split-ack-moves-to-ring: a terminal ack migrates the pending receipt into the ring', () => {
     const state = folded(initialMemoryState(), [op('op-1', 'add', { content: 'fact' })])
-    const split = splitReceipts(state.appliedOps, ['op-1'], CONFIG.receiptWindowSize)
+    const split = splitReceipts(state.appliedOps, [opId('op-1')], CONFIG.receiptWindowSize)
     expect(split.pendingReceipts).toEqual([])
     expect(split.recentTerminalReceipts).toEqual(state.appliedOps.pendingReceipts)
   })
 
   it('split-reack-idempotent: re-acking terminal op ids is a no-op (T58)', () => {
     const state = folded(initialMemoryState(), [op('op-1', 'add', { content: 'fact' })])
-    const once = splitReceipts(state.appliedOps, ['op-1'], CONFIG.receiptWindowSize)
-    const twice = splitReceipts(once, ['op-1'], CONFIG.receiptWindowSize)
+    const once = splitReceipts(state.appliedOps, [opId('op-1')], CONFIG.receiptWindowSize)
+    const twice = splitReceipts(once, [opId('op-1')], CONFIG.receiptWindowSize)
     expect(twice).toEqual(once)
   })
 
@@ -269,10 +275,10 @@ describe('splitReceipts', () => {
     ])
     let appliedOps = state.appliedOps
     for (let round = 0; round < 5; round += 1) {
-      appliedOps = splitReceipts(appliedOps, ['op-2'], CONFIG.receiptWindowSize)
+      appliedOps = splitReceipts(appliedOps, [opId('op-2')], CONFIG.receiptWindowSize)
     }
-    expect(appliedOps.pendingReceipts.map(receipt => receipt.opId)).toEqual(['op-1'])
-    expect(appliedOps.recentTerminalReceipts.map(receipt => receipt.opId)).toEqual(['op-2'])
+    expect(appliedOps.pendingReceipts.map(receipt => receipt.opId)).toEqual([opId('op-1')])
+    expect(appliedOps.recentTerminalReceipts.map(receipt => receipt.opId)).toEqual([opId('op-2')])
   })
 
   it('split-ring-evicts-oldest: the ring FIFO-evicts beyond the window', () => {
@@ -281,28 +287,28 @@ describe('splitReceipts', () => {
       op('op-2', 'add', { content: 'fact' }),
       op('op-3', 'add', { content: 'fact' }),
     ])
-    const split = splitReceipts(state.appliedOps, ['op-1', 'op-2', 'op-3'], 2)
-    expect(split.recentTerminalReceipts.map(receipt => receipt.opId)).toEqual(['op-2', 'op-3'])
+    const split = splitReceipts(state.appliedOps, [opId('op-1'), opId('op-2'), opId('op-3')], 2)
+    expect(split.recentTerminalReceipts.map(receipt => receipt.opId)).toEqual([opId('op-2'), opId('op-3')])
     expect(split.pendingReceipts).toEqual([])
   })
 
   it('split-10k-mutations-bounded-ring: ten thousand mutations leave a bounded record', () => {
     const pendingReceipts = Array.from({ length: 10_000 }, (_, index) => ({
-      opId: `op-${index}`,
+      opId: opId(`op-${index}`),
       resultDigest: `digest-${index}`,
     }))
-    const opIds = pendingReceipts.map(receipt => receipt.opId)
+    const opIds: OpId[] = pendingReceipts.map(receipt => receipt.opId)
     const split = splitReceipts({ pendingReceipts, recentTerminalReceipts: [] }, opIds, 4)
     expect(split.pendingReceipts).toEqual([])
     expect(split.recentTerminalReceipts).toHaveLength(4)
-    expect(split.recentTerminalReceipts[0]).toEqual({ opId: 'op-9996', resultDigest: 'digest-9996' })
+    expect(split.recentTerminalReceipts[0]).toEqual({ opId: opId('op-9996'), resultDigest: 'digest-9996' })
   })
 
   it('split-orphan-opid-fails: an ack naming an unknown op fails loud', () => {
-    expect(() => splitReceipts(initialMemoryState().appliedOps, ['op-unknown'], CONFIG.receiptWindowSize))
+    expect(() => splitReceipts(initialMemoryState().appliedOps, [opId('op-unknown')], CONFIG.receiptWindowSize))
       .toThrow(/terminal ack names op op-unknown/)
     try {
-      splitReceipts(initialMemoryState().appliedOps, ['op-unknown'], CONFIG.receiptWindowSize)
+      splitReceipts(initialMemoryState().appliedOps, [opId('op-unknown')], CONFIG.receiptWindowSize)
       expect.unreachable('split should have thrown')
     } catch (error) {
       expect((error as MemoryError).code).toBe('invalid_structure')

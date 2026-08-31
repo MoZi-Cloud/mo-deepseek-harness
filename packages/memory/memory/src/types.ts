@@ -26,9 +26,10 @@ export type ProjectKey = Branded<'ProjectKey'>
  * Identifier of one review-protocol mutation. Supplied by the session-review
  * saga's `deriveOpId` (pure derivation over attemptId/resourceKind/opIndex/
  * canonical-op-digest), so the same logical op carries the same id across
- * crash and recovery replays; this package never mints one.
+ * crash and recovery replays; this package never mints one. Opaque across
+ * the memory/skill/review resource boundaries — branded, never bare string.
  */
-export type OpId = string
+export type OpId = Branded<'OpId'>
 
 /** Logical scope of one memory state inside the single Service. */
 export type MemoryScope =
