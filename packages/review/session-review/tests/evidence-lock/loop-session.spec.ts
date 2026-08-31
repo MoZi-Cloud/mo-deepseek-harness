@@ -230,7 +230,7 @@ describe('T21 pre-step-waterfall-order', () => {
     const entered = Promise.withResolvers<undefined>()
     const gate = Promise.withResolvers<undefined>()
     ctx.on('agent/pre-step', async (_payload, next): Promise<PreStepDecision> => {
-      entered.resolve()
+      entered.resolve(undefined)
       await gate.promise
       const decision = await next()
       if (decision.kind !== 'enter') return decision
@@ -249,7 +249,7 @@ describe('T21 pre-step-waterfall-order', () => {
     expect(adapter.requests).toHaveLength(0)
     expect(eventsOf(agent).some(event => event.type === 'step/start')).toBe(false)
 
-    gate.resolve()
+    gate.resolve(undefined)
     await waitForIdle(ctx, agent)
     expect(adapter.requests).toHaveLength(1)
     expect(messageTexts(adapter.requests[0]?.messages ?? [])).toContain('[evlock pre-step context]')
