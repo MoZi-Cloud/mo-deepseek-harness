@@ -14,9 +14,25 @@ Status: implemented
 
 注册足迹保持机械性：subsystem-pages 门新增 `review` 豁免（尚无运行时子系统），组加入 `packages/README.md` 表，聚合 tsconfig 引用本包。
 
+矩阵现已全部钉死：10 个 spec 共 72 条测试覆盖全部 68 例——storage/fs 契约、技能注册表、session/tools/subagent/query/preset 面，以及评审协议本身：游标 claim 与结算、append-only ledger attempt、名称预留、带回执集的 record CAS、完成标记 bundle 协议、saga 终结定序、分组 terminal ack。协议用例以两个参照模块（`review-protocol.ts`、`managed-protocol.ts`）跑在真实 storage-domain 写链与真实 `ctx.fs` bundle 上；memory 域用例跑在真实 Cordis 服务注册表上。
+
 ## Consequences
 
 评审设计的假设现在败于一条测试，而非运行时事故：改动任一被钉死契约，都会在 `packages/review/session-review/tests/evidence-lock/` 浮现确切的矩阵用例。代价是维护——套件会重复钉死所属包已测的契约，同一契约变更可能要求一个 PR 内同步两个套件。套件的依赖面也远宽于包在运行时真正会 import 的范围；devDependencies 必须与测试 import 保持一致，否则 knip 会响亮失败。
+
+## 套件修正的假设
+
+- T01：未知 provider 是异步 `NO_PROVIDER` rejection，不是同步抛错；重复 provider 注册才是同步抛错。
+- T04：子会话持久化 header 键为驼峰（`parentSession`、`delegationDepth`）；矩阵写作 `parent_session`。
+- T05：`session-query` 位于 `packages/session-query/session-query`，不在 `packages/session/` 下。
+- T28/T29/T42/T43 指向尚无生产实现的未来 P1/P3 机制。游标、claim、memory service、composite snapshot 事实由测试树内参照实现钉死。T42/T43 在早前批次计划中缺席；因验收门要求 68 例全覆盖而归入本批。
+- T12：`SubagentStopReasonMap` 是纯类型导出；终态集合以类型化数组钉死，而非枚举运行时对象。
+- T15：durable `tool/result` 事件不携带 exec 身份——名称只能经 callId 与 `tool/call` 配对恢复；provider 归因在 live `tools/result` 通道（T41）。
+- T44：域单开分两层。同一 facility 二开拒绝为 `already-open` 域错误；第二个 facility 打开同一 backend 命中 backend 的"unit is already open"活句柄守卫。
+- T16：pre-step 瀑布注册顺序使先注册者在外层，内层监听的 `next()` 观察不到外层产物。目录事实经被 await 的 decision 钉死，而非嵌套监听。
+- 内置文件系统技能 provider 名为 `filesystem`；`self-evolution-managed` 保留给进化产物。
+- `defineContentToolFixture` 接收属性映射方言（`{ text: { type: 'string', required: true } }`），不是裸 JSON schema。
+- pre-push 钩子的全新 `tsc -b tsconfig.host.json` 能抓到增量 `pnpm run typecheck` 漏掉的 spec 类型错误；每次 push 前先复现钩子序列。
 
 ## Alternatives considered
 
@@ -26,4 +42,4 @@ Status: implemented
 
 ## Verification
 
-`npx vitest run packages/review/session-review/tests` 跑套件；`npx tsc -b packages/review/session-review`；`verify-package-invariants`、`verify-subsystem-pages`、`verify-package-readme-limitations`、`verify-tsconfig-paths`、`verify-translation-pairing`。
+`npx vitest run packages/review/session-review/tests`（72 条测试）跑套件；`npm run build:lib:host && npm run typecheck:contracts-ready`（pre-push 序列——不是增量 `pnpm run typecheck`）；`verify-package-invariants`、`verify-subsystem-pages`、`verify-package-readme-limitations`、`verify-tsconfig-paths`、`verify-translation-pairing`。
