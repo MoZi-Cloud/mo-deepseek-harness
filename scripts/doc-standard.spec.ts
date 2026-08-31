@@ -76,6 +76,7 @@ const PACKAGE_LIBRARIES: Readonly<Record<string, string>> = {
   'packages/typert/generator': 'Build-time generator run outside any agent runtime.',
   'packages/typert/protocol': 'Compiler-independent protocol declarations.',
   'packages/util/atomic-write': 'Zero-dependency filesystem write utility.',
+  'packages/util/content-scan': 'Zero-dependency threat-scan utility for self-evolution content gates.',
   'packages/util/brand': 'Type-only branding primitive erased at compile time.',
   'packages/util/crypto': 'Zero-dependency identifier minting utility.',
   'packages/util/home-paths': 'Zero-dependency harness-home path resolver.',
