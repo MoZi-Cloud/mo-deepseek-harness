@@ -1,157 +1,183 @@
-# 自我进化机制方案 RC5.5.2（第八轮后开工前修补：规格缺口收口，架构零变化）
+# 自我进化机制方案 RC5.5.3（第九轮协议闭合与拓扑重排）
 
 > 状态：设计备忘（fork 侧工作文档，登记于 translation-pairing 排除清单）
 >
-> 版本脉络：RC1 → 评审（`评审报告.md`）→ RC4 → 第二轮核验（`RC5-外部建议核验与处置.md`）→ RC5.1 → 第四轮（`RC5.1-评审报告.md` + `RC5.2-第四轮评审核验与处置.md`）→ RC5.2 → 第五轮（`RC5.2评审报告.md` + `RC5.3-第五轮评审核验与处置.md`）→ RC5.3 → 第六轮（`RC5.3-第六轮纠错完善建议.md` + `RC5.4-第六轮评审核验与处置.md`，12 S1 全部证实）→ RC5.4 → 第七轮（`RC5.4-第七轮收口评审.md` + `RC5.5-第七轮评审核验与处置.md`，6 项全部证实）→ RC5.5 → 第八轮（`RC5.5-第八轮开工评审.md` + `RC5.5.1-第八轮评审核验与处置.md`，6 项全部证实）→ RC5.5.1 → 开工前自查修补（无独立评审轮——第八轮纪律下的 spec-bug 级原位修订）→ 本 RC5.5.2
+> 版本脉络：RC5.5.2 → `第九轮评审建议.md` 证据复核版 → `RC5.5.3-第九轮评审核验与处置.md` → 本 RC5.5.3。第九轮初评中被复核撤回的 requestDigest、自引用、当前跨 LLM provider 与 release-before-finalized 结论不进入本版。
 >
-> 函数级规格：`RC5.5-函数级规格总纲.md` + 附件 P0–P4（类名/签名/调用关系/验收标准，TDD）
+> 函数级规格：`RC5.5-函数级规格总纲.md` + 附件 P0–P5；文件名保持稳定，内容原位升版，避免并存两套权威规格。
 >
-> 证据基线：upstream master = `cd5ef81`（fork 零代码漂移）；Hermes 锚点 = 本地 clone `05c248d8`（第五轮处置 §5）；证据账本 = 历轮评审/处置文档
+> 证据基线：DeepSeek Harness `16bd8323def3178fb6c21e008e9e2c28d2458896`；mozi-hermes-agent `05c248d8a6c7f6d0d26efbb35fba3d6dfeb36a06`；日期：2026-09-01。
 >
-> 阶段裁定（第八轮）：**RC5.5.1 = Architecture Frozen / Implementation Approved**——九原则与包边界冻结；P0/P1 即刻 GO；P2 先红 T62/T64/T65 三组再写 mutation path；P3 骨架与纯函数 GO、finalization commit path 前置 T66–T68 三协议；P4 after P3；P5 按原计划。自此停发 RC5.6 式文档套件：后续发现默认按 bug / invariant test / implementation adjustment 处理，仅当 P0 REAL-composition 反证 DSH API 基础假设时才重开架构。首版 crash model = Host/process crash + restart（`fs-local/src/fsio.ts:546-594` staged + atomic rename），不声称断电/内核崩溃级保证
->
-> 日期：2026-08-29（RC5.5.1 增补 2026-08-30；RC5.5.2 修补 2026-08-30）
+> 阶段裁定：RC5.5.3 = **Architecture Frozen / Implementation Approved**。P1 已提交的纯函数层保留，但 Service 前先完成 RC5.5.3 对齐批；P2 先叶子函数后 mutation/tool；P3 必须按 canonicalization → admission → durable stores → finalization → live/history orchestration 的拓扑开发；P4 after P3；P5 质量门通过前保持 shadow。
 
-## 0.0 相对 RC5.4 的增量（第七轮 6 项收口，处置 §1）
+## 0. RC5.5.3 的问题闭合
 
-1. **定位传递（S1-1）**：任何 API 不裸传 `SkillId`——Store/Authoring/治理一律 `ManagedSkillRef{projectKey, skillId}`；projectKey 由 Service 入口从 `cwd/scope` 解析（同 `resolveMemoryScope` 型），`ResolvedProject` 只做内部中间值不做公共类型。
-2. **revision 身份与资源 receipt（S1-2）**：`ManagedRevisionId = hash(skillId, requestedByOpId)`——并发 op 不共路径、同 op 重放同路径；bundle 写入 = 全量重写 + 完成标记末位 `createIfAbsent`（fs 无 move/delete，部分写入靠重放补全，标记在而 digest 异才是 `invalid_structure`）；`lastAppliedOpId` 在 CAS 中激活，patch 先查重（duplicate-before-stale，与 memory 同型）。
-3. **可见谱系（S1-3）**：provider 可见 = `active | stale`（stale 是归档倒计时不是隐藏态）；隐藏 = `draft | rejected | archived`——否则 stale 的 meaningful-use 复活是死分支（tool-skill 每次调用先 re-list，`tool-skill/src/index.ts:134-136`）。
-4. **pending 四字段（S1-4）**：`pendingRevision{revisionId, contentDigest, catalogSummary, createdByOpId}`，approve 单 record CAS 原子切换；get 的 definition summary 取 candidate 冻结字段（`SkillCandidate extends SkillSummary` 字段齐全），content 取 `locator.revision`。
-5. **ack 分组 + 幂等（S1-5）**：`acknowledgeTerminalOps(scopeGroups)`；语义三分——in pending → 迁移、已在环 → duplicate-ack 成功、两无 → `invalid_structure`；P3 terminal-recovery 先重放 `terminal && !terminalAcked` 再接受新 mutation。
-6. **`effectiveThrough` 持久化（S1-6）**：进 `ReviewAttempt`，LearningView 完成后、planner 前回填；terminal-recovery 唯一推进依据，禁止恢复期重算。
+1. **direct operation 身份与 receipt**：review op 由 attempt/plan 派生并先入 pending；前台 `skill_manage` 与 memory 治理分别由 durable `ToolCallId`/`CommandId` 派生 op id，并在资源提交的同一 RMW 中直接进入 bounded terminal ring。P1/P2 不导入 P3。
+2. **planner 隔离与非递归**：review provider 必须支持 `toolFilter/outputSchema/persona/agentOptions`、必须 `inheritsParentContext=false`；请求固定 `toolFilter:{allow:[]}`；只有 root session 可触发。spawn 仍继承 standing composition，本版以真实请求 snapshot 和 Host evidence admission 约束它，不声称绝对空白上下文。
+3. **finalization 最后崩溃点**：定序为 mark terminal → apply cursor disposition → mark finalized → assign/index stable outcome ordinal → acknowledge finalized receipts → release cursor；review receipt 在 ledger finalized 前仍处 pending 且不淘汰，启动先修复 unfinalized terminal、缺 ordinal/index 与 finalized+occupied，之后才允许 claim。
+4. **memory 精确定位**：update/remove 计划和 Host op 必须携 `targetEntryId/expectedEntryDigest`；`targetHint` 只作说明，不参与选择。
+5. **结果证据**：Host 从 durable events 提取 user-authored、tool-success、tool-failure、failure-recovered、unresolved、unknown 等结构信号；turn completed 与 assistant 自称成功均不是任务成功。unresolved 经验不得进入可见 memory/skill。
+6. **计划身份协议**：P3 独占 versioned `canonicalPlanOpDigest` 与固定 `enumeratePlanOps`；P1 执行结果摘要改名 `memoryResultDigest`。
+7. **重试真相进入 claim**：pre-plan blockedUntil、retry/supersede/manual 与 stored-plan resume gate 持久化在 cursor lane；`ReviewClaimCoordinator` 串行调用 `claimDue(now)`，不能由下一 turn 或历史扫描绕过。确定性 evidence/policy/scan/quota 拒绝以 rejected noChange consumed 并进质量评分；pre-plan 瞬态失败新 attempt retry，plan 落盘后的瞬态失败以同一 attempt/op ids resume。
+8. **存储预算蕴含发布预算**：P1 load-time 证明最坏 admitted state 包含 header、id 前缀、围栏、换行及全部启用 scope 后仍可发布；确定性预算矛盾不是 publisher 的正常 fail-open。
+9. **冷历史批处理**：P3 改为唯一 host 级 Service；使用 `sessionQuery.listSessions/observeSession`、持久化 scan checkpoint 与 `agents.resume` 枚举 cold root sessions，和实时路径共用 per-session claim。
+10. **memory 纠错治理**：Conservative L1 提供 list/show/correct/remove；纠错与删除走 exact digest、direct-terminal receipt，下一 snapshot 不再包含旧内容。是否对全部 inference 做 pending approval 留给 rollout policy，不误写成 Hermes 默认。
+11. **scanner 覆盖**：P1/P2 配置必须令一个模型可见文本单元不超过 `MAX_SCAN_CHARS`；skill 每个可见文本文件整文件扫描。
+12. **curator 可达状态机**：model load 不等于 verified reuse；user load 持久化 winning provider，top-level model tool 以同条 durable result meta 绑定 provider 与 rendered-content digest；nested PTC 结果不直接进入模型，不计 model load。observer gap 把完整 inactivity 窗口重置到恢复时，而非永久冻结或把 gap 当零；P4 以 ReviewAttempt 上稳定递增的 outcome ordinal 分页，避免 late finalization 漏记和随机 AttemptId 循环扫描的无限去重集；archived 只经用户 restore。
+13. **可执行 P5**：固定七类 fixture、baseline/held-out、阈值、失败动作与报告；rollout level 参与 cursor lane identity，shadow proposal 永不直接提升，L1 新 lane 重审历史。
+14. **provenance 权威**：review 以永不删除、状态单调且 plan 落定后不可变的 ReviewAttempt 为真相，direct memory 以同样单调保留的 GovernanceOperation 为真相，direct skill tool 以 immutable revision lineage 为真相；op index 是可重建投影，receipt 只负责 replay 去重。
+15. **user principal**：`MemoryScope.user` 现在必须携 branded `UserKey`；L2 没有 principal 时 fail-loud，不再保留进程全局 user record。
+16. **非 Git identity**：nearest `.git` 未命中时仍按 cwd；这是已声明限制，不假设仓库里不存在的 WorkspaceId。
+17. **pending receipt 有界背压**：required `maxConcurrentReviews × maxPlanOps` 给 review pending 数量硬上界；durable inFlight 占用在重启后重建，cleanup 未收敛时禁止新 acquired，但不阻断正常 Agent。
+18. **孤儿 revision 数量背压**：P2 除 orphan bytes 外还限制每项目 incomplete+orphan revision count；零字节 partial 也计数，避免“不物理删除”被无限空目录绕过。
+19. **usage 重放有界且不重复**：P4 分别以 durable session seq、P2 bounded revision lineage 与 P3 outcome ordinal 扫描；page 结算持有 source mutex，recent receipt 窗口必须覆盖任一整页，避免 crash-before-checkpoint 后重复计数或永久保存所有 signal id。
 
-## 0.0.1 相对 RC5.5 的增量（第八轮 6 项开工补丁，处置 §1）
+## 1. 第一原则
 
-1. **Skill receipt 对称化（S1-1，T65）**：退役 `lastAppliedOpId` 单槽——跨 session 窗口（A 落账、B 再写、A 重放）下已发生的 op 被误判 `stale_base_revision`。`ManagedSkillRecord.appliedOps = SkillAppliedOps { pendingReceipts, recentTerminalReceipts }` 与 Memory 对称；单 record CAS 同时落 state + receipt；重放查重 `pending ∪ recentTerminal` 先于 base 校验；`ManagedSkillService.acknowledgeTerminalOps({ref, opIds}[])` terminal 后入有界环。
-2. **create 幂等（S1-2，T64）**：`NameIndex` 值改 `NameReservation { skillId, reservedByOpId }`——同 op 重入 resume、异 op `name_conflict`；create 流程重排为 receipt 查重 → op-aware reserve → 完成标记写 bundle → record CAS + receipt。
-3. **`OpId` 派生钉死（S1-3，T62/T63）**：`OpId = hash(attemptId, resourceKind, stableOpIndex, canonicalOpDigest)`（`deriveOpId` 纯派生，模型不提供 opId，恢复重放同 op 同 id）——`ManagedRevisionId`、两资源 receipt、`MemoryEntryId` 的重放稳定性共同 rooted 在此。
-4. **ack 输入修正（S1-4，T66）**：ack 权威输入 = `ReviewAttempt.opStates[]` 中 `state ∈ {applied, duplicate}` 的 op（非 plan 全量——partial-saga 与零 mutation terminal 不再误报 `invalid_structure`）；`opStates` 升格正式类型 `ReviewOpState`。
-5. **finalization 协议（S1-5，T67）**：`terminalAcked?` 改名 `finalized`（"字段存在 ≠ 协议存在"再现）；定序 `markTerminal(status, rangeDisposition) → ack applied receipts（memory + skill）→ advance（仅 consumed，单调 max-guard）→ markFinalized`；recovery 入口 `terminal && !finalized`。
-6. **`RangeDisposition`（S1-6，T68，P3 最重 blocker）**：`consumed | superseded | retryable | manual` 随 markTerminal 落账；**仅 consumed 允许 advance(effectiveThrough)**，其余 disposition 恢复时清 inFlight 不推进（下次触发重 claim，宁重审不跳审）。L1 映射修正评审提案：consumed 仅 committed/noChange；stale/budget → superseded；拒绝类（含 admission/policy/planner 瞬态）→ retryable 背退——评审的"policy rejected → consumed"自带"若产品决定不再重试"括号，L1 不采纳：零 commit 拒绝的 range 重审合法（base state 可能已变），advance 即违反 `saga-range-never-skips`；manual 预留 L2。
+1. Everything is a plugin, but not every role is a package.
+2. LLM proposes; Host commits.
+3. Dynamic model-visible state is replay-authoritative；进入模型请求的动态内容必须能从 durable session 重建。
+4. Model text never owns authority metadata；id、scope、clock、base revision、digest、receipt mode 与 lifecycle actor 均由 Host 构造。
+5. Trigger at least once；资源提交幂等；仍可能恢复的 op receipt 不得淘汰。
+6. Project autonomous domain first；L1 只写 project，user scope 等待 principal。
+7. Learning requires admissible evidence and admissible outcome；引用存在只是必要条件。
+8. Managed output 在每个模型可见读入口完成 digest、结构和内容检查前不可信。
+9. Visibility is a separate commit；resource write、governance approval 与 model publication 是不同步骤。
 
-## 0.0.2 相对 RC5.5.1 的增量（开工前自查修补，六项，全部规格级）
-
-1. **P1 ack 措辞对齐（第八轮 S1-4 残留）**：`RC5.5-附件P1` §3 `acknowledgeTerminalOps` 正文仍写"按 plan memory op 的 target/scope 分组"——即第八轮已证伪并改正的表述，与同文件头部声明自相矛盾；改为 applied-only `opStates` 分组。
-2. **P3 Config 表恢复**：全套重写时 RC5.1-P3 §6 的 Config 清单失落，triggerMode/预算/persona/rolloutLevel 等散落正文无集中表——违反"tunables 必须是 validated Config 字段"与总纲 §1 自身约定；按现行机制重组为 P3 §7。
-3. **`transitionManagedSkill` 补规格**：总纲调用图、本文件 §3、P4 runPass、P2 验收名四处引用而零处有签名（"字段存在 ≠ 协议存在"残留）；补入 P2 §3（单 record CAS + 时间锚点同笔落账 + Service 层 pinned 门）。
-4. **P0 计数更正**：矩阵实为 68 项，其中 T09/T11 为历史回归（活跃 66）；"68 活跃 + 2 历史"的写法合计 70，各处更正为"68 项（66 活跃 + 2 历史回归）"。
-5. **`pinned` L1 无产生点声明**：治理命令面（list/show/approve/reject/reopen）无 pin/unpin，L1 恒 false——照 `manual` disposition 先例声明"L2 预留、L1 无产生点"；Service 层 pinned 门不可绕过（P4 `pinned-user-gate-unbypassable` 语义锚点）。
-6. **命名残留清理**：P2 Config `stagingRootName` → `managedRootName`（staging 概念已随目录方案消亡，该字段实为 revisions 根）；总纲调用图 "SkillAuthoring=" 旧包名标签删除。
-
-架构、数据模型、阶段裁定零变化——按第八轮纪律属 implementation-adjustment 级，不构成新的评审轮次。
-
-## 0. 相对 RC5.3 的四组实质变化
-
-1. **唯一所有权（第六轮 S1-1..S1-3、S1-7）**：Cordis Service 同名注册即抛（`vendor/cordis/src/service.ts:37-53`、`reflect.ts:272-285`）、`DomainFacility` 单开域名（`storage-domain/src/index.ts:66-95`）——一切共享资源必须有一个唯一 owner。Memory = 单一 `MemoryService` 内部管 project/user 两逻辑 scope（一个 composite Publisher 发一条消息）；Skill = P2 一步到位的 `packages/skill/skill-managed` Service（唯一 domain owner，同包 named export `skill_manage` 工具插件挂 authoring preset），P3 的抽出步骤取消。NameIndex 首次 reserve 走 `ensureNameIndex` 初始化协议。
-2. **身份与可见性（S1-4..S1-6、S2-2、S2-6）**：`ProjectKey = hash((await ctx.fs.resolve(findProjectRoot(cwd))).targetKey)`（realpath 身份，`fs/fs/src/index.ts:100-118`；`FsTargetKey` 禁止解析，`types.ts:8-15`）；authoring commit 固化 `catalogSummary` 进 sidecar，**`list()` 只读 storage、`get()` 才读 filesystem + bundle digest + 扫描**——模型可见 catalog 的信任与 body 信任分层（tool-skill 每 pre-step 把 summary 写进 durable catalog 消息，`tool-skill/src/index.ts:219-250`）；usage 归属改监听 live `tools/result`（durable `tool/result` 无 canonical value，`core/tools/src/index.ts:193-198`）；T36 钉死 registry 真相（最近层恒胜，与人/managed 无关），shipped"人工恒胜"由挂载位置 + REAL 枚举达成。
-3. **治理状态机闭环（S1-8、S1-9、S2-5）**：新增 `rejected` 状态（draft → rejected → 显式 reopen；`archived` 专属曾 active 生命周期）；active patch 改 `pendingRevision`——写新 revision 不切 `currentRevision`，治理 approve 才 CAS 切 pointer；draft patch 仍直接推进（本就不可见）。模型自此在 L1 无任何路径改动模型可见技能。
-4. **attempt 与 receipt 协议化（S1-10..S1-12、S1-11）**：`attemptId = hash(rangeId, attemptNo)`（attemptNo 由 cursor durable 分配；`baseStateDigest` 降为 attempt 字段，消除 preclaim 循环）；`budget_exceeded` → zero commit → consolidation 生成**新 attempt** 重走 whole-plan admission；receipt 二分 `pendingReceipts`（non-terminal 永不淘汰）+ `recentTerminalReceipts`（terminal 后 ack 入有界环才可 GC）——保留正确性显式编码，ack 缺失=过量保留（安全方向）。
-
-锁定项（不再讨论）：自进化业务不进 `agent-loop`；LLM 只 proposes；host 拥有全部权威字段；spawn 复盘；子会话持久化保留 + 检索面隔离；project 自治域先行；L0→L2 rollout；首版无 `review/*` 事件；LLM curator consolidation 默认关；不改 registry 消费侧；不改 durable 事件面（telemetry 走 live 事件）；不声称断电/内核崩溃级 crash 保证（首版 crash model = process crash + restart）。
-
-## 0.1 九条第一原则（终稿）
-
-1. **Everything is a plugin, but not every role is a package.**
-2. **LLM proposes; Host commits.**
-3. **Dynamic model-visible state is replay-authoritative**（动态内容来自 durable Session source；静态面由 composition revision + validated Config 重建）。
-4. **Model text never owns authority metadata.**
-5. **At-least-once trigger; resource-level idempotent commit.**
-6. **Project autonomous domain first.**
-7. **Learning requires admissible evidence.** 证据引用是必要条件非充分条件；模型自报 confidence 不构成授权。
-8. **Managed output is untrusted until every model-visible read boundary is verified.** 不止 body：catalog summary 同样经 sidecar 固化后才行（trust transition：Untrusted proposal → Host validation → immutable revision → digest+scan（body）/ sidecar（summary）→ registry）。
-9. **Visibility is a separate commit.** 写入完成 ≠ 模型可见；经 authority/policy gate 后 Host 才切换模型可见状态（memory：权威 mutation → 下一 pre-step 发布；skill：revision 写入 → approval → pointer activation）。
-
-## 1. 数据模型
+## 2. 数据模型
 
 ```text
-ProjectKey（branded）        = hash(ctx.fs.resolve(findProjectRoot(cwd)).targetKey)
-SkillId（branded）           = hash(ProjectKey, normalizedName)——确定性，同名并发天然串行
-ManagedSkillRef（branded）   { projectKey, skillId }——一切 Store/Authoring/治理 API 的定位单位，
-                               禁止裸传 SkillId（单向 hash 无法反推 projectKey，第七轮 S1-1）
-OpId（branded）              = hash(attemptId, resourceKind, stableOpIndex, canonicalOpDigest)
-                               ——deriveOpId 纯派生（第八轮 S1-3，T62/T63）：模型不提供 opId；
-                               同一 immutable plan 任意次 recovery 同 opId；payload 变 → id 变；
-                               ManagedRevisionId/两资源 receipt/MemoryEntryId 的重放稳定性共同 rooted 在此
-ManagedRevisionId（branded） = hash(skillId, requestedByOpId)——op-derived：并发 op 不共路径，
-                               同 op 重放同路径（第七轮 S1-2）
-ReviewCursor（per-session）  { sessionId, reviewedThroughSeq, desiredThroughSeq, policyVersion,
-                               learningViewVersion, rangeId,
-                               inFlight? { attemptId, attemptNo, fromExclusive,
-                               throughInclusive, status: running|resumable } }
-ReviewRangeId                = hash(sessionId, fromExclusive, throughInclusive, policyVersion,
-                               learningViewVersion)
-ReviewAttemptId              = hash(rangeId, attemptNo)——attemptNo cursor durable 分配
-ReviewOpState                { opId, resource: 'memory'|'skill', resourceRef,
-                               state: prepared|applied|duplicate|failed }——ledger 缺席 = not-started；
-                               saga recovery authority（第八轮 S1-4）：ack 只取 applied|duplicate
-ReviewAttempt（append-only） { attemptId, attemptNo, status: planning|planned|committing|
-                               committed|failed|cancelled, baseStateDigest?, plan?, planDigest?,
-                               baseRevisions?, opStates: ReviewOpState[], attemptCount,
-                               lastFailureCode?, nextRetryAt?, finalized?, effectiveThrough?,
-                               rangeDisposition?: consumed|superseded|retryable|manual }
-                               ——plan 永不可变；effectiveThrough 在 LearningView 完成后、planner 前
-                               回填（第七轮 S1-6，禁止恢复期重算）；rangeDisposition 随 markTerminal
-                               落账，仅 consumed 允许 advance（第八轮 S1-6，T68）；finalized = 本
-                               terminal attempt 全部恢复义务完成（第八轮 S1-5，T67）
-ReviewPlan（模型数据）       { memory[{ action, target:'project'|'user', targetHint?, content?,
-                               kind, evidence[{seq, span?, fieldPath?}], reason, confidence }],
-                               skills[{ action:'create-draft'|'patch-draft', skillName,
-                               patchTarget?: skillId, candidateSearchSummary?,
-                               whyNoExistingManagedSkillFits?, classLevelRationale?,
-                               evidence[], files[] }], noChangeReason? }
-MemoryState                  { schemaVersion, revision, entries[],
-                               appliedOps: { pendingReceipts, recentTerminalReceipts } }
-CompositeMemorySnapshot      { kind:'memory', form:'snapshot', sections,
-                               scopes:{ project?:{revision,digest}, user?:{revision,digest} },
-                               digest }——一个 producer，P1 只填 project
-ManagedSkillRecord           { projectKey, skillId, name, owner,
-                               state: draft|active|stale|archived|rejected,
-                               currentRevision: ManagedRevisionId, contentDigest,
-                               pendingRevision?{ revisionId, contentDigest, catalogSummary,
-                               createdByOpId }——四字段随 approve 单 CAS 原子切换（第七轮 S1-4），
-                               catalogSummary{ name, description, whenToUse?, invocation },
-                               revision, createdAt, promotedAt?, stateChangedAt?, staleAt?,
-                               archivedAt?, createdByAttemptId?,
-                               appliedOps: SkillAppliedOps, pinned }
-SkillAppliedOps              { pendingReceipts: SkillOpReceipt[],       // non-terminal 永不淘汰
-                               recentTerminalReceipts: BoundedRing }    // 与 Memory 对称（第八轮 S1-1）
-SkillOpReceipt               { opId, action, revisionId?, resultDigest }——CAS 内与 state 同笔落账；
-                               重放查重 pending ∪ recentTerminal 先于 base 校验（T65）
-NameIndex（per-project）     { projectKey, nameToReservation }——ensureNameIndex + 单 RMW；
-                               NameReservation { skillId, reservedByOpId }：同 op 重入 resume、
-                               异 op name_conflict（第八轮 S1-2，T64）
+ProjectKey                 = Branded<'ProjectKey'> = hash(ctx.fs.resolve(projectRoot).targetKey)
+UserKey                    = Branded<'UserKey'>，仅由未来 principal provider 给出；RC5.5.3 不生成默认值
+MemoryScope                = {kind:'project', projectKey} | {kind:'user', userKey}
+OpId                       = Branded<'OpId'>；各包可声明同一 brand，不建立反向 package dependency
+ReviewOperationOrigin      = {kind:'review', opId}
+DirectMemoryOrigin         = {kind:'direct-command', opId, sessionId, commandId}
+
+MemoryEntry                = {id, content, kind, evidence, createdAt, updatedAt,
+                              createdByOpId, lastAppliedOpId}
+MemoryEntryDigest          = canonical digest of the exact current entry record
+HostMemoryOp               = add{opId,entryId,now,content,...}
+                            | update/remove{opId,entryId,expectedEntryDigest,now,...}
+MemoryState                = {schemaVersion, revision, entries,
+                              appliedOps:{pendingReceipts,recentTerminalReceipts}}
+
+ManagedSkillRef            = {projectKey, skillId}
+ManagedRevisionId          = hash(skillId, requestedByOpId)
+ManagedMutationOrigin      = {kind:'review',opId} |
+                             {kind:'direct-tool',opId,sessionId,callId}
+ManagedSkillRecord         = {projectKey,skillId,name,owner,state,currentRevision,contentDigest,
+                              catalogSummary,pendingRevision?,appliedOps,revisionLineage,
+                              pinned,lifecycle anchors}
+NameReservation            = {skillId,reservedByOpId}
+
+ReviewCursorLaneId         = hash(sessionId, policyVersion, learningViewVersion, rolloutLevel)
+ReviewCursorLane           = {reviewedThroughSeq,desiredThroughSeq,
+                              inFlight?:{attemptId,resumeRetryCount,resumeBlockedUntil?},nextAttemptNo,
+                              retryCountSinceAdvance,supersedeCountSinceAdvance,
+                              blockedUntil?,manualHold?}
+ReviewRangeId              = hash(laneId,fromExclusive,throughInclusive)
+ReviewAttemptId            = hash(rangeId,attemptNo)
+ReviewAttempt              = retained monotonic {attemptId,range,opIdentityVersion,status,effectiveThrough,
+                              immutablePlan?,planDigest?,baseRevisions?,opStates[],outcomes,
+                              rangeDisposition?,finalized?,failure?}
+ReviewOpState              = {opId,resource,resourceRef,state:prepared|applied|duplicate|failed}
+RangeDisposition           = consumed | superseded | retryable | manual
+
+ReviewPlan.memory          = add{target,content,kind,evidence,...}
+                            | update{target,targetEntryId,expectedEntryDigest,content,kind,evidence,...}
+                            | remove{target,targetEntryId,expectedEntryDigest,evidence,...}
+ReviewPlan.skills          = create-draft | patch-draft（patch 携 exact ref/revision/digest）
+OutcomeSignal              = user-authored | tool-success | tool-failure | failure-recovered
+                            | unresolved | transient | unknown
+HistoricalScanCheckpoint   = {cycle, after?:{createdAt,sessionId}, notBefore?}
 ```
 
-## 2. 包规划与挂载
+`REVIEW_OP_IDENTITY_VERSION = 1` 是协议常量，不是部署 tunable。`enumeratePlanOps` 固定先 memory、后 skills，各数组保持模型输出顺序，`stableOpIndex` 是合并序列的零基索引；canonical digest 编码完整 validated plan op 与 identity version，排除 Host 后加的 opId/entryId/clock/resolved ref。
 
-| 包 | 内容 | Phase | 挂载层 |
-|---|---|---|---|
-| `packages/util/content-scan` | `scanContent()` + `PATTERN_SET_VERSION` + 四语料 | P1 | — |
-| `packages/memory/memory` | **单一** `MemoryService extends Service`（project/user 两逻辑 scope + `acknowledgeTerminalOps(scopeGroups)`）；composite `MemoryPublisher`（pre-step，fail-open） | P1 | host 组合 |
-| `packages/skill/skill-managed` | **`ManagedSkillService extends Service`**（唯一 domain owner：Store/NameIndex/Provider/AuthoringCore；`ManagedSkillRef` 定位 + op-derived `ManagedRevisionId` + 完成标记协议）；named export `skill_manage` 工具插件 | P2 | Service+provider 挂 host cordis.yml（global 层）；工具挂 authoring preset |
-| `packages/review/session-review` | `ReviewRuntime` + RangeId/Attempt ledger + 两阶段 planner + admission/saga + 治理命令 | P3 | authoring preset（session-query 默认过滤先行） |
-| `packages/skill/skill-curator` | 生命周期状态机（active 谱系）+ live `tools/result` usage | P4 | host 组合 |
+## 3. 包、角色与挂载
 
-**fork-diff 台账**（对上游包的修改仅此一处，PR 逐行说明）：`packages/session-query/tool-session-query` 模型面默认附加 `{kind:'parent', values:[null]}`（`session-query/src/types.ts:198`）+ `includeChildSessions` 逃生参数；`ctx.sessionQuery` 服务不改。**不**为 telemetry 修改 tool-skill 持久化面。
+| 包 | 角色 | 挂载 |
+|---|---|---|
+| `packages/util/content-scan` | `scanContent`、pattern/version/cap 常量 | 纯工具包 |
+| `packages/memory/memory` | 唯一 `MemoryService`、composite `MemoryPublisher`、memory 纯函数 | host composition，一次 |
+| `packages/skill/skill-managed` | 唯一 `ManagedSkillService`、Provider/Store/Authoring；named `skill_manage` | Service/provider 在 host；tool 在 authoring preset |
+| `packages/review/session-review` | 唯一 `SessionReviewService`、cursor/ledger、live scheduler、historical coordinator、governance commands | **host composition，一次**；不再按 session 重复挂载 |
+| `packages/skill/skill-curator` + 既有 `skill`/`tool-skill` source 小扩展 | durable invocation provider、usage coverage、状态机、maintenance、指标投影 | host composition，一次 |
+| P5 eval surface | fixture manifest、runner、score/gate/report | 无 runtime package；进入 repository gate |
 
-## 3. 机制要点（细节见附件）
+`tool-session-query` 模型工具仍默认 root-only，`ctx.sessionQuery` Host 服务不改。P3 的历史枚举直接使用 Host `listSessions/observeSession`，不通过模型工具。
 
-- **memory**（P1）：单 Service 双 scope；发布 = `sanitizeForPublication → buildSnapshotSections（含两 scope 节）→ combined digest → 比对 → 发布 CompositeMemorySnapshot`；receipt 二分 + `acknowledgeTerminalOps(scopeGroups)`（幂等三分：pending 迁移 / 已入环 duplicate-ack / 两无 `invalid_structure`，S1-5；输入来自 P3 的 applied-only opStates，第八轮 S1-4）；opId 由 `deriveOpId` 供给 → `MemoryEntryId` 与 receipt 跨恢复稳定（第八轮 S1-3）；双闸扫描 + fail-open 不变。
-- **skill-managed**（P2）：一切 API 走 `ManagedSkillRef`，禁止裸 `SkillId`；`list()` storage-only、可见谱系 = `active | stale`（S1-3；单条损坏 → last-good + `complete:false`）；`get()` = projectKey 校验 → exact revision → 整 bundle digest → 读边界重扫 → definition（summary/invocation 取 candidate 冻结字段、content 取 `locator.revision`，S1-4）；revision 目录 op-derived（`revisions/<ManagedRevisionId>/`）+ 全量重写 + 完成标记 `createIfAbsent`（S1-2）；**资源 receipt 与 Memory 对称**（`SkillAppliedOps`，CAS 内同笔落账，重放查重先于 base 校验，第八轮 S1-1/T65）；create = receipt 查重 → `checkNameConflict(AuthoringContext)` → `ensureNameIndex + reserveName(…, requestedBy)`（NameReservation：同 op resume / 异 op conflict，第八轮 S1-2/T64）→ `validateStructure` → 写 revision → record(draft, catalogSummary, receipt)；patch 先查重、active 且 pending 未决 → `pending_pending_conflict`，draft 直进 currentRevision、active 只进 pendingRevision 四字段；promote/activate/reject/reopen = 治理面 CAS（activatePending 四字段原子切换）；`acknowledgeTerminalOps({ref, opIds}[])`；配额 fail-loud。
-- **触发与取消**（P3）：三触发模式 + settlement（planning 取消清 inFlight；planned/committing 转 resumable 续 stored plan）——RC5.3 已定，不变；**finalization 协议**（第八轮 S1-5/S1-6，T66–T68）：opId = `deriveOpId` 纯派生 → saga commit（`markOpState` 落 `ReviewOpState`）→ `markTerminal(status, rangeDisposition)` → ack **applied-only** receipts（memory + skill）→ `advance(effectiveThrough)` **仅 disposition=consumed**（单调 max-guard）→ `markFinalized`；启动 recovery 重放 `terminal && !finalized`，非 consumed disposition 清 inFlight 不推进。
-- **admission + saga**（P3）：whole-plan admission；`stale_base_revision` → 新 attempt replan；`budget_exceeded` → zero commit → consolidation 新 attempt（`maxConsolidationAttempts` 默认 2）→ 仍败 terminal 零 commit；L1 启用 scope = project（ReviewInput/persona 声明）+ `target:'user'` backstop 拒绝（记录 + `target_scope_disabled`）。
-- **治理面**（P3）：宿主命令 list/show/approve/reject/reopen——approve 双语义（draft 上架；active pending 切 pointer），全部全重验后走 Service CAS；模型工具面无任何治理动作。
-- **usage**（P4）：live `ctx.on('tools/result')`——`exec.name==='skill' && !result.isError && result.value?.provider === MANAGED_SKILL_PROVIDER_NAME`，按确定性 `skillId = hash(projectKey, name)` 归属（无需查表）；`/name` 只作聚合遥测；进程内存活期观测，HMR dispose 即止。
-- **生命周期**（P4）：`transition()` 只迁移 active 谱系（active/stale/archived）；draft/rejected 永不自动迁移；orphan/配额遥测；一切写经 `transitionManagedSkill`。
-- **rollout**（P5）：L0 Shadow → L1 Conservative → L2 Autonomous（user scope section、PendingChange durable store、inference 门）；operational/quality 指标两拆不变。
+## 4. 运行链
 
-## 4. Phase 门槛（P0–P5）
+```text
+live root trigger ─┐
+                   ├─ isReviewEligibleSession ── ReviewClaimCoordinator ── claimDue(cursor lane)
+cold-root scan ────┘                                  │
+                                                     v
+                                    projectEvents + classifyOutcomeSignals
+                                                     │
+                                                     v
+                                      tool-free fresh ReviewPlanner
+                                                     │
+                                                     v
+                         persist immutable plan → enumerate/canonicalize/derive op ids
+                                                     │
+                                                     v
+                 exact targets + evidence/outcome + policy + read-only whole-plan preflight
+                                       │                             │
+                                       v                             v
+                         MemoryService.previewOps   ManagedSkillService.preflightMutations
+                                       │                             │
+                                       └──── zero write until all admit ────┘
+                                                     │
+                                                     v
+                               MemoryService                 ManagedSkillService
+                               pending review receipt        pending review receipt
+                                       └────────── saga opStates ──────────┘
+                                                     │
+                                                     v
+    markTerminal → cursor disposition → markFinalized → outcome ordinal/index → finalized ack → release
+                                                     │
+                                                     v
+                          next pre-step memory snapshot / user skill approval and catalog
+```
 
-P0 = Evidence Lock 68 项（66 活跃 + 2 历史回归；附件 P0，含第七轮 T54–T61、第八轮 T62–T68）。P1 = 单 Service 双 scope + composite 发布 + receipt 二分 + ack 分组幂等协议（opId 由 deriveOpId 供给）。P2 = skill-managed Service 一步到位（ManagedSkillRef 定位、storage-only list、visible = active|stale、op-derived RevisionId + 完成标记、**SkillAppliedOps 资源 receipt + NameReservation op-aware 占位**、pendingRevision 四字段 + 互斥、rejected/reopen、NameIndex ensure、配额、跨层 REAL 枚举）；**先红 T62/T64/T65 三组再写 mutation path**。P3 = review 全链（attempt 简化、consolidation 新 attempt、治理双语义、scope backstop、effectiveThrough 持久化、deriveOpId + ReviewOpState + markTerminal(disposition)/markFinalized finalization 协议）+ session-query 默认过滤；**骨架/纯函数先行，finalization commit path 前置 T66–T68**。P4 = curator（active 谱系状态机 + live usage 归属；stale 可见可复活）。P5 = rollout + 指标两拆。
+Review child 的工具目录为空且执行也被拒；它没有父 conversation seed。继承的 standing prompt、host context publisher 与 current resource summaries 均不拥有 evidence authority。Host 只接受 `LearningView` 中可定位的 durable seq/span 和 outcome signal。
 
-每 Phase 固定门槛：per-file 100% 覆盖、REAL-composition boot、HMR disposal、snapshot、双 SDK（类型面变更时）、doc-sync、Agent Note。
+`tool-success` 只证明 execution 非 error：它可支持 project fact 或仍不可见的 managed skill draft，不能单独让 procedure/caution memory 上线。Host recovery 只配对同 root turn、同 invocation fingerprint（工具名 + canonical durable arguments）的失败与 later success；同为 generic shell 但参数不同不算。可见 procedure、recovery 与 caution 需要明确 user correction 或该结构 recovery；参数改变的 repair sequence 只能先形成隐藏 draft。unresolved/transient/assistant-only 一律零可见 mutation。
 
-## 5. 非目标
+## 5. finalization、retry 与恢复
 
-不改 `agent-loop`；不改 registry 消费侧语义；不新增模型工具面以外的动态模型可见通道；不做语义/向量检索；不做跨设备同步；不扩 `writableRoots`；不做 user-dsh 自主写；首版不做 user scope section 与 PendingChange durable store（L2）；不实现窄删除 capability 与 orphan 物理清理；不修改 tool-skill 持久化面（telemetry 用 live 事件）；不做多 Host 共享 storage root；首版不加 `review/*` 会话事件；不给 `ctx.fs` 加通用 move/delete。
+`consumed` 仅用于 committed、planner empty noChange、确定性 admission rejected noChange 或用户显式 skip；确定性 rejection 保留 machine code 并进入 P5 false-proposal 计分。在 immutable plan 和任何 resource write 之前，typed stale/可缩小 plan budget 是 `superseded`，typed 瞬态/provider/planner failure 是 terminal `retryable`，下一 attempt 受 persisted backoff/cap。plan 落盘后的瞬态失败不 terminal，而是在同一 inFlight 写 `resumeBlockedUntil/resumeRetryCount`，到期以 stored plan/op ids 续跑；已有 op applied 后出现 stale 或 invariant failure 转 manual，不能重规划掩盖部分提交。未知或不可能的 phase/code 组合 fail-loud/manual，不解析错误文字猜测瞬态。`manual` 只有用户 `/learning retry|skip` 可释放；下一 turn 不能自动重领。
+
+只有 terminal decision 才进入六步 durable protocol：`markTerminal` → `applyCursorDisposition` → `markFinalized` → `ensureFinalizedOutcomeIndexed` → 只对 applied/duplicate opState 调 `acknowledgeFinalizedOps` → `releaseAttempt`。ordinal 由 ledger durable counter 分配并单调写入 ReviewAttempt；counter 先写的崩溃只留下 gap，已分配 ordinal 永不改变，查询索引可从 attempt 重建。在 `markFinalized` 之前 review receipt 不离开 pending，因而不会被 terminal ring 淘汰；在 outcome 已可分页发现且 cleanup 成功前 cursor 不 release。每次启动和每次新 acquired 前先 `reconcileReviewState`：unfinalized terminal 重放 disposition/mark；finalized attempt 补 ordinal/index；finalized+occupied 重放 cleanup 后 release，绝不 resume；planned/committing 按 resume gate 续同一 attempt。host 协调器以 durable occupied lane 数限制 `maxConcurrentReviews`，plan schema 限制 `maxPlanOps`；index/cleanup 未收敛时关闭新 acquired，因此 pending 不淘汰也有硬上界，正常前台 Agent 仍继续。
+
+## 6. 历史会话与 rollout
+
+HistoricalReviewCoordinator 稳定枚举授权的 persisted root sessions，过滤 child、无 cwd、禁用 session、时间/项目范围与当前 preset；每处理一项后更新 checkpoint。冷 session 用 all-projections observation 读取最新 `agentPreset`，以 `agents.resume(setup: presets.mount(...))` 恢复，review 到 observation cursor 后释放 handle。若 session 已 live，直接使用 live Agent；两条路径最终都由同一 cursor RMW 决胜。
+
+cursor lane identity 包含 rollout level。shadow lane 可以 advance 自己的 high-water，但 proposal 永远是 audit-only；升级 conservative 产生新 lane，由实时触发和历史 coordinator 重审，不修改旧 lane、不直接提交 shadow plan。P5 gate 失败保持 shadow，成功也只授权 composition/config 切换，不绕过新 lane admission。
+
+## 7. 治理与 provenance
+
+L1 memory 命令提供 list/show/correct/remove；skill 命令提供 list/show/approve/reject/reopen/restore；review 命令提供 retry/skip/enable/disable。命令处理器使用已写入 `command/run` 的 `CommandId`，模型工具不拥有治理动作。
+
+ReviewAttempt immutable plan 与 opStates 是 review provenance authority；GovernanceOperation 是 direct memory command authority；P2 record 中与 revision 成功 CAS 同笔写入的 immutable lineage 是 direct skill tool authority。`opId → source/resourceRef` 索引是派生缓存：先写 authority，索引后写；启动扫描 attempts、governance operations 与 skill lineage 补缺，冲突 fail-loud。Memory current entry 以 opId 链接来源；skill revision/pending 以 createdByOpId 链接。receipt ring 淘汰不得破坏 show/history。
+
+## 8. Phase 与开发顺序
+
+1. **P0**：现有 68 项 Evidence Lock 保持为 test-tree 历史记录；T69–T86 是后续生产测试，其中 T85/T86 取代 T67/T68 的生产 finalization 顺序/admission 分类，不伪装成 P0 已完成。
+2. **P1 对齐批**：先改 types/domain 与 pure helpers，再写 Service，再写 Publisher/assembly；具体拓扑见附件 P1。
+3. **P2**：types/config（含 orphan byte+count caps）→ identity/structure → receipt helpers → store/provider/conflict/quota → batch preflight/authoring → governance/Service → tool；具体拓扑见附件 P2。
+4. **P3**：types/projection/outcome/canonical/targets/admission → settlement/cursor/claim coordinator → ledger/finalization → planner/runtime → live/history/governance；具体拓扑见附件 P3。
+5. **P4**：durable invocation provider → usage classification/coverage/transition → usage/checkpoint Store → session/revision/outcome source reconciliation → curator → metrics；具体拓扑见附件 P4。
+6. **P5**：manifest/fixtures → keyless replay → disposable eval-domain materialization → controlled runner → scorer → gate/report；具体拓扑见附件 P5。
+
+每个 Phase 出口需要 focused behavior tests、per-file 100% coverage、REAL composition、HMR/teardown、必要的 keyless session snapshot、双 SDK projection（事件/wire 面变化时）、README/Agent Note 与仓库文档门。调用者的开发不得早于被调用函数的测试通过。
+
+## 9. 非目标与限制
+
+不改 `agent-loop`；不让 planner 调 mutation tools；不做向量检索、跨设备同步、多 Host 共享存储或断电级分布式事务；不把 scanner 宣称为完备安全证明；不在 L1 启用 user scope；不提供无 principal 的 user fallback；不物理删除 orphan skill bundles；不把 best-effort usage absence 当作归档证据；不直接提升 shadow proposal。
+
+首版 crash model 是 Host/process crash + restart。Git 项目按 nearest `.git` 聚合；非 Git 项目按创建 session 的 cwd 分 scope，子目录可能分裂，诊断必须显示该 identity source。

@@ -1,123 +1,260 @@
-# RC5.5 附件 P3 — Session review（函数级规格）
+# RC5.5.3 附件 P3 — Session review（函数级规格）
 
-> 上位：`RC5.5-函数级规格总纲.md`；架构依据 `自我进化机制-RC5.5-方案.md`（第六轮 S1-10/S1-11、S2-4、S2-7；第七轮 S1-5/S1-6；第八轮 S1-3..S1-6）。
+> 上位：`RC5.5-函数级规格总纲.md`；前置：P1、P2；包：`packages/review/session-review`；日期：2026-09-01。
 >
-> 包：`packages/review/session-review`；消费 `ManagedSkillService`（第三消费者，零搬迁；patch 走 `ManagedSkillRef` + 资源 receipt + ack）与 `MemoryService`（含分组幂等 ack）。前置：P1、P2 全绿。
->
-> 相对 RC5.4-P3（第七轮收口）：`effectiveThrough` 随 attempt 持久化；applied-only ack；terminal-recovery。
->
-> 相对 RC5.5-P3（第八轮收口）：**opId 分配 = `deriveOpId` 纯派生**（第八轮 S1-3/T62/T63——`OpId = hash(attemptId, resourceKind, stableOpIndex, canonicalOpDigest)`，模型不提供 opId，恢复重放同 op 同 id）；**ack 输入修正**（S1-4/T66）——`opStates` 升格 `ReviewOpState { opId, resource, resourceRef, state: prepared|applied|duplicate|failed }`，ack 只取 `applied|duplicate`（partial-saga / 零 mutation terminal 不再误报 `invalid_structure`）；**finalization 协议**（S1-5/T67）——`terminalAcked` 改名 `finalized`，定序 `markTerminal(status, rangeDisposition) → ack applied receipts（memory + skill）→ advance（仅 consumed，单调 max-guard）→ markFinalized`，recovery 入口 `terminal && !finalized`；**`RangeDisposition`**（S1-6/T68）——consumed 仅 committed/noChange；stale/budget → superseded；拒绝/瞬态/前台取消 → retryable 背退；manual 预留 L2。**骨架与纯函数先行；finalization commit path 前置 T66–T68 三协议**。RC5.5.2 修补：恢复 Config 表（新 §7——RC5.1-P3 §6 的清单按现行机制重组，全套重写时失落；tunables 必须是 validated Config 字段，总纲 §1）；session-query 与验收门顺延为 §8/§9。
->
-> 日期：2026-08-29（RC5.5.1 增补 2026-08-30；RC5.5.2 修补 2026-08-30）
+> RC5.5.3 将本包从每会话 preset 行改为唯一 host 级 `SessionReviewService extends Service`。这是冷历史枚举、review domain 单 opener、全局 checkpoint 与跨 live/cold claim 共用的必要条件；`skill_manage` 仍只挂 authoring preset，planner 用 `toolFilter:{allow:[]}` 隔离。
 
 ## 1. 模块布局
 
 ```text
-packages/review/session-review/
-  src/index.ts         # 触发器装配（triggerMode + foreground 抢占 + settlement）
-  src/types.ts         # LearningView/ReviewPlan/Cursor/RangeId/AttemptId/错误
-  src/learning-view.ts # eventKindAdmissible / projectEvents（turn fold）/ estimateTokens（纯）
-  src/plan-schema.ts   # ReviewPlanSchema（zod + maxItems/maxStringLength）+ OUTPUT_SCHEMA
-  src/cursor.ts        # ReviewCursorStore（claim 分配 attemptNo；settlement）
-  src/ledger.ts        # ReviewLedgerStore（attempts append-only；terminal ack 回调）
-  src/admissibility.ts # checkEvidenceAdmissibility（纯）
-  src/governance.ts    # 治理命令（list/show/approve/reject/reopen）
-  src/runtime.ts       # ReviewRuntime
-tests/*.spec.ts
+src/types.ts          # plan/outcome/cursor/attempt/provenance/config types
+src/config.ts         # config validation + review provider preflight
+src/eligibility.ts    # root/session/preset/control predicates
+src/learning-view.ts  # event projection、turn fold、outcome signals
+src/plan-schema.ts    # discriminated ReviewPlan schema/output schema
+src/plan-identity.ts  # canonical JSON、enumeration、digests、ids/version
+src/targets.ts        # exact memory/skill target resolution
+src/admissibility.ts  # evidence/outcome/policy/whole-plan preflight
+src/cursor.ts         # lane/due/disposition/release durable store
+src/ledger.ts         # attempts/governance/provenance projection
+src/finalization.ts   # applied-only grouping + recovery protocol
+src/planner.ts        # provider preflight/start/gate
+src/runtime.ts        # stored-plan saga
+src/history.ts        # corpus enumeration/checkpoint/resume
+src/governance.ts     # memory/skill/review human commands
+src/index.ts          # host Service、events/effects/maintenance assembly
 ```
 
-## 2. 纯函数规格
+## 2. 核心类型
 
-#### `eventKindAdmissible(event): boolean`
-- 验收：`kind-admit-human-tool-invocation`、`kind-exclude-synthetic`、`kind-exclude-assistant-deferred-to-fold`。
+```text
+ReviewCursorLaneId = Branded<'ReviewCursorLaneId'>
+ReviewRangeId = Branded<'ReviewRangeId'>
+ReviewAttemptId = Branded<'ReviewAttemptId'>
+OpId = Branded<'OpId'>
+ReviewCursorLane = {laneId,sessionId,reviewedThroughSeq,desiredThroughSeq,nextAttemptNo,
+                    inFlight?:{attemptId,resumeRetryCount,resumeBlockedUntil?},
+                    retryCountSinceAdvance,supersedeCountSinceAdvance,
+                    blockedUntil?,manualHold?}
+DispositionDecision =
+  | {kind:'consumed'}
+  | {kind:'superseded',count}
+  | {kind:'retryable',count,blockedUntil}
+  | {kind:'manual',reason,heldAt}
+FinalizedOutcomeOrdinal = Branded<'FinalizedOutcomeOrdinal'>  # canonical positive decimal string
+ReviewAttempt = {attemptId,range,status,opIdentityVersion,effectiveThrough?,outcomes?,
+                 immutablePlan?,planDigest?,baseRevisions?,opStates[],terminal?,finalized?,
+                 finalizedOutcomeOrdinal?:FinalizedOutcomeOrdinal}
+ReviewOpState = {opId,resource:'memory'|'skill',resourceRef,state:'prepared'|'applied'|'duplicate'|'failed'}
+FinalizedOutcomePageQuery = {afterOrdinal?:FinalizedOutcomeOrdinal,limit}
+FinalizedOutcomePage = {items,nextAfterOrdinal?:FinalizedOutcomeOrdinal,atEnd}
+ReviewMemoryOp = AddPlanMemoryOp | UpdatePlanMemoryOp | RemovePlanMemoryOp
+LearningKind = user-fact | user-preference | project-fact | verified-procedure | verified-recovery | caution
+OutcomeSignal = {kind:'user-authored'|'tool-success'|'tool-failure'|'failure-recovered'|'unresolved'|'transient'|'unknown',
+                 sessionId,turnRef,eventSeqs,callIds,invocationFingerprint?}
+ReviewSettlement = committed | empty-plan | user-skip | admission-rejected | stale-state |
+                   consolidatable-plan-budget | transient-infrastructure | planner-infrastructure |
+                   protocol-failure
+ReviewSettlementClass = {kind:'consumed'|'superseded'|'retryable'|'resume'|'manual',reasonCode,scoreAsFalseProposal}
+OperationProvenance = review-attempt | governance-command | direct-skill-tool
+GovernanceOperation = {opId,sessionId,commandId,action,target,status:'prepared'|'applied'|'failed',result?}
+```
 
-#### `projectEvents(events, range, config): { view, effectiveThrough, contextOnly? }`
-- 验收：`project-oldest-first-contiguous`、`project-effective-through-stops-at-budget`、`project-contextonly-not-citable`、`project-turn-fold-final-only`、`project-interrupted-excluded`、`project-compaction-invariant`。
+Update/remove memory plan 必须有 `targetEntryId/expectedEntryDigest`；skill patch 必须有 `ManagedSkillRef/baseRevision/baseContentDigest`。`targetHint/reason/confidence` 可保留为说明，但不拥有 target、evidence 或 authorization 权力。
 
-#### `checkEvidenceAdmissibility(plan, events): AdmissibilityReport`
-- 职责：seq 在 range、span 存在；`explicit-user` extractive；`observed-project` tool outcome；抽象降级 inference；上限 `maxEvidenceRefsPerProposal`/`maxSpanBytes`。
-- 验收：`span-present-passes`、`forged-span-rejects`、`abstract-downgraded-to-inference`、`observed-requires-tool-outcome`、`missing-evidence-rejects`、`current-state-not-citable`、`evidence-refs-capped`。
+## 3. 开发拓扑
 
-#### `deriveRangeId(...) / deriveAttemptId(rangeId, attemptNo): ReviewAttemptId`（S1-10）
-- 职责：纯；`attemptId = hash(rangeId, attemptNo)`——claim 时即可算出（T50）；`baseStateDigest` 是 attempt 字段、claim 后回填、不参与 id。
-- 验收：`attempt-id-derivable-at-claim`（T50）、`attempt-distinct-no-per-attempt-input`。
+| 顺序 | 节点 | 只可调用 |
+|---:|---|---|
+| P3-D01 | types + Config schema | P1/P2 public types、existing core types |
+| P3-D02 | `isRootSession/isReviewEligibleSession` | D01 |
+| P3-D03 | `eventKindAdmissible/projectEvents/canonicalToolInvocationFingerprint` | D01、durable session events、crypto |
+| P3-D04 | `classifyOutcomeSignals` | D03 projected events |
+| P3-D05 | ReviewPlanSchema + `enumeratePlanOps/canonicalPlanOpDigest` | D01 |
+| P3-D06 | lane/range/attempt/review-op/direct-command id derivation | D01、D05 canonical digest |
+| P3-D07 | `resolveMemoryPlanTargets/resolveSkillPlanTargets` | D01、P1/P2 current views |
+| P3-D08 | evidence/outcome/policy checks + `wholePlanAdmission` | D03–D07、P1/P2 preflight APIs |
+| P3-D09 | `classifyReviewSettlement` | D01、D08 typed results |
+| P3-D10 | `decideResumeGate/decideDisposition` | D01、D09 |
+| P3-D11 | cursor pure transitions | D01、D06、D10 |
+| P3-D12 | `ReviewCursorStore` | D11、storage domain |
+| P3-D13 | `ReviewClaimCoordinator` | D12 |
+| P3-D14 | ledger/governance records/outcome + provenance projection | D01、D05、D06、storage domain |
+| P3-D15 | finalized-receipt grouping + `finalizeAttempt/reconcileReviewState` | D10、D12–D14、P1/P2 finalized-ack |
+| P3-D16 | `resolveReviewProvider/startPlanner/gatePlannerResult` | D01、D05、subagent service |
+| P3-D17 | `ReviewRuntime.runReview/ensureReviewThrough` | D02–D16、P1/P2 mutation APIs |
+| P3-D18 | live scheduler/foreground settlement | D02、D13、D15、D17 |
+| P3-D19 | history enumeration/checkpoint/route/preset resume | D02、D13、D17、sessionQuery/agents/presets |
+| P3-D20 | governance commands + provenance show | D06、D07、D10、D12–D15、P1/P2 direct/governance APIs |
+| P3-D21 | `SessionReviewService` assembly | D01–D20 |
 
-#### `deriveOpId(attemptId, resourceKind: 'memory'|'skill', stableOpIndex: number, canonicalOpDigest: string): OpId`（第八轮 S1-3，T62/T63）
-- 职责：纯；`OpId = hash(attemptId, resourceKind, stableOpIndex, canonicalOpDigest)`——从 immutable attempt + stored plan 纯派生，模型不提供 opId，无持久化分配器；同一 plan 任意次 recovery/resume 同 opId（T62）；payload 变 → opId 变（T63）；两资源 receipt 与 `MemoryEntryId` 的重放稳定性共同 rooted 在此。
-- 验收：`op-id-stable-across-planned-recovery`（T62）、`changed-op-payload-changes-op-id`（T63）、`model-supplied-opid-rejected`（T62）。
+不得先写 D17 再回填 identity/admission；不得让 history 自建 claim；不得让 governance 绕过 resource direct API。
 
-## 3. 存储规格
+#### `validateReviewConfig(config): ResolvedReviewConfig`
+- 拓扑：P3-D01。
+- 职责：fail-closed 解析全部 Config 与 enum；plan/evidence/token/rate/retry/resume/history 数值必须 finite 正整数或文档允许的零值；`maxPlanOps/maxConcurrentReviews` required，乘积必须为 safe integer 且不超过显式 `maxPendingReviewOps` safety cap。review provider 名称、rollout/policy/learning-view version 与项目/preset allowlist 在 load-time 固定；不在 runtime 隐式补默认。
+- 验收：`review-config-valid-exact-boundaries`、`review-plan-and-concurrency-required`、`pending-product-overflow-fails-load`（T85）、`retry-and-resume-config-distinct`、`unknown-rollout-level-fails-load`、`runtime-does-not-default-config`。
+
+## 4. Eligibility、LearningView 与 outcome
+
+#### `isRootSession(header): boolean` / `isReviewEligibleSession(observation,control,config): Eligibility`
+- 拓扑：P3-D02。
+- 职责：root 要求 `parentSession===undefined`、`origin!=='subagent'`、`delegationDepth` 缺省或 0；eligible 另要求 cwd、授权 preset、项目/时间范围、session control enabled 与至少一个 completed root turn。projected current preset 优先于 creation header。
+- 验收：`review-trigger-root-session-only`（T71）、`review-child-turn-end-never-dispatches-review`、`selected-preset-projection-not-stale-header`、`disabled-session-ineligible`、`empty-session-ineligible`。
+
+#### `eventKindAdmissible(event): boolean` / `projectEvents(events,range,config): LearningProjection` / `canonicalToolInvocationFingerprint(call): string`
+- 拓扑：P3-D03。
+- 职责：projection oldest-first contiguous；只投影 human user content、tool call/result 与 turn outcome；assistant 只保留每 turn 最终可读摘要但标为 non-authority；compaction 不改 seq；command/review child/synthetic context 不可引用；预算截断返回 persisted `effectiveThrough`。fingerprint 对 typed durable tool name + parsed arguments 做 recursively sorted-key canonical JSON、数组保序，再 domain-separated hash；排除 callId/time/result，不持久化 raw canonical arguments。
+- 验收：`project-oldest-first-contiguous`、`project-effective-through-stops-at-budget`、`project-contextonly-not-citable`、`project-turn-fold-final-only`、`project-interrupted-excluded`、`project-compaction-invariant`、`governance-events-not-relearned`、`tool-fingerprint-key-order-stable`、`tool-fingerprint-argument-change-differs`、`tool-fingerprint-excludes-call-id-and-clock`。
+
+#### `classifyOutcomeSignals(projection): readonly OutcomeSignal[]`
+- 拓扑：P3-D04。
+- 职责：按 durable callId 配 tool call/result；isError true=tool-failure，false=tool-success（仅 execution 成功）。Host 对 validated durable tool name + canonical arguments 计算不含原文的 invocation fingerprint；只有同 root turn 内相同 fingerprint 的 later non-error 才形成 failure-recovered，generic tool name 相同或参数改变均不足。最后未恢复失败形成 unresolved；typed Host transient code 才形成 transient，模型文字不能；user message形成 user-authored evidence source，不自动断言语义正确。每个 signal 保留 session/turn/event seq/call id 坐标；fingerprint 只做结构配对，不证明语义因果。
+- 验收：`tool-error-is-not-success`、`turn-completed-is-not-task-success`、`assistant-success-claim-is-insufficient`（T74）、`same-invocation-failure-then-success-pairs-recovery`（T75）、`same-shell-tool-different-arguments-do-not-pair`、`invocation-fingerprint-does-not-store-secret-arguments`、`unrecovered-final-tool-failure-is-unresolved`、`model-cannot-label-transient`、`explicit-user-text-is-user-authored`。
+
+## 5. Plan schema、identity 与 targets
+
+#### `ReviewPlanSchema` / `gatePlanShape(value,config): ReviewPlan`
+- 拓扑：P3-D05。
+- 职责：object-rooted zod/JSON schema；memory discriminated union；skill create/patch union；字符串/items/files/evidence 全硬上限；reject unknown authority fields `opId/entryId/now/revisionId/receiptMode`（`targetEntryId` 是 planner 从 current view 复制的 opaque target，add entryId 不在 schema）。
+- 验收：`plan-memory-union-discriminates`、`update-remove-require-id-and-digest`（T73）、`model-supplied-opid-rejected`、`plan-ops-capped-schema-and-host`、`unknown-authority-fields-rejected`。
+
+#### `enumeratePlanOps(plan): readonly EnumeratedPlanOp[]`
+- 拓扑：P3-D05。
+- 职责：memory 全部在前、skill 全部在后；数组内部原顺序；全 plan 零基 stable index；不依赖 object property/commit success 顺序。
+- 验收：`review-plan-enumeration-order-pinned`（T76）、`empty-plan-enumerates-empty`、`recovery-enumerates-stored-plan-identically`。
+
+#### `canonicalPlanOpDigest(op,identityVersion): string`
+- 拓扑：P3-D05。
+- 职责：`REVIEW_OP_IDENTITY_VERSION=1`；recursive sorted keys、arrays ordered、undefined properties omitted、Unicode UTF-8 bytes unchanged；编码完整 validated plan op + version；排除 Host fields。旧 planned attempt 按持久化 version dispatch，未知 version fail-loud。
+- 验收：`canonical-plan-digest-vectors-match-evidence-lock`（T76）、`canonical-plan-digest-excludes-host-fields`、`identity-version-survives-planned-recovery`、`unknown-identity-version-fails-loud`、`memory-result-digest-not-used-for-op-identity`。
+
+#### `deriveCursorLaneId/deriveRangeId/deriveAttemptId/deriveReviewOpId/deriveCommandOpId`
+- 拓扑：P3-D06；review op 调 D05 digest。
+- 职责：lane hash 包含 rollout level；attemptNo 由 cursor durable 分配；review op=`attempt/resource/stableIndex/planDigest/version`；command op=`memory-governance/v1/sessionId/CommandId/canonical action`。模型不提供。
+- 验收：`rollout-level-changes-cursor-lane`（T83）、`attempt-id-derivable-at-claim`、`op-id-stable-across-planned-recovery`、`changed-plan-payload-changes-op-id`、`command-op-id-derived-from-durable-command`（T80）。
+
+#### `resolveMemoryPlanTargets(plan,currentMemory): ResolvedMemoryOps` / `resolveSkillPlanTargets(plan,currentSkills): ResolvedSkillOps`
+- 拓扑：P3-D07。
+- 职责：memory add 由 review op id 派生 entry id；update/remove exact id+digest；同 plan 同 entry 重复触及拒绝；skill patch exact ref/revision/digest，create 做 managed overlap/name intent check。targetHint 不参与解析。
+- 验收：`memory-update-targets-exact-entry-id`（T73）、`memory-remove-targets-exact-entry-id`、`memory-target-stale-digest-zero-commit`、`memory-target-unknown-zero-commit`、`memory-plan-duplicate-target-zero-commit`、`skill-patch-exact-ref-and-base`。
+
+## 6. Admission
+
+#### `checkEvidenceAndOutcome(plan,projection,outcomes,config): AdmissibilityReport`
+- 拓扑：P3-D08；调用 D03/D04。
+- 职责：seq/range/span/fieldPath 精确；current resource state 可用于 target/去重但不可作 evidence。user-fact/preference 需要 user-authored；project-fact 需要 user-authored 或 tool-success source。可见 memory 的 verified-procedure/verified-recovery/caution 必须由明确 user correction 或 D04 同-fingerprint failure-recovered 支持，单个 non-error、同工具名不同参数或模型自称“已修复”均不足。参数改变的 repair sequence 可支持不可见 skill draft，但仍需治理 approve。unresolved/transient/assistant-only 不得产生任何可见 mutation，也不得借 `caution` 绕过。confidence 不授权。
+- 验收：`span-present-passes`、`forged-span-rejects`、`current-state-not-citable`、`explicit-user-correction-is-admissible`、`single-tool-success-cannot-publish-procedure-memory`、`tool-success-can-only-propose-hidden-skill-draft`、`unresolved-failure-produces-zero-visible-learning`（T74）、`unresolved-cannot-hide-in-caution`（T74）、`failure-fix-verification-saves-only-working-path`（T75）、`missing-binary-is-not-durable-rule`、`evidence-refs-capped`。
+
+#### `wholePlanAdmission(plan,resolved,currentState,config): Promise<AdmissionDecision>`
+- 拓扑：P3-D08；调用 D07、evidence check、`MemoryService.previewOps`、`ManagedSkillService.preflightMutations`。
+- 职责：所有 evidence/target/scope/ownership/conflict/scan/quota/publication preview 在第一个 mutation 前完成；任一拒绝整 plan zero commit。preflight 后 race 由 resource expected base 捕获并转 superseded；L1 user target `target_scope_disabled`；shadow 永远返回 audit-only。
+- 验收：`admission-all-or-nothing-no-partial-commit-start`、`preflight-covers-both-resources-before-write`、`user-target-backstop-l1`、`plan-duplicate-target-zero-commit`、`shadow-admission-never-mutates`。
+
+## 7. Cursor、ledger 与 finalization
+
+#### `classifyReviewSettlement(settlement): ReviewSettlementClass`
+- 拓扑：P3-D09。
+- 职责：只读取 typed phase、attempt 是否已 planned、applied|duplicate opState 数与 machine code，不解析 message。committed、planner empty、用户 skip 与 D08 返回的确定性 evidence/outcome/policy/scan/quota rejection → consumed；其中 rejection 原样保留 code 且 `scoreAsFalseProposal=true`。immutable plan 尚未落盘时的 stale base/target 或可缩小 plan budget → superseded，typed 瞬态/provider/planner failure 与 planning cancel → retryable。immutable plan 已落盘后的 typed 瞬态或 planned cancel → resume，同一 attempt/op ids 续跑；若已有 applied op，后续 stale、确定性 apply rejection或 protocol failure 不能重规划掩盖部分提交，直接 manual/fail-loud。未知 code 与 impossible phase/code 组合同样 manual。apply 阶段若在已通过同一 config/state preflight 后返回确定性 scan/quota code，属于 protocol failure；并发资源变化应先表现为 stale CAS。
+- 验收：`settlement-classification-exhaustive`、`classification-never-parses-error-message`、`deterministic-admission-rejection-classifies-consumed-and-scored`（T86）、`preplan-transient-classifies-retryable`、`planned-transient-classifies-resume`、`partial-saga-stale-classifies-manual`、`post-preflight-deterministic-rejection-is-protocol-failure`、`unknown-code-classifies-manual`。
+
+#### `decideResumeGate(inFlight,classification,now,config): ResumeDecision` / `decideDisposition(cursor,classification,now,config): DispositionDecision`
+- 拓扑：P3-D10；调用 D09，不重复解释错误。
+- 职责：resume 分类只由 `decideResumeGate` 转成同一 inFlight 的 persisted exponential `resumeBlockedUntil/resumeRetryCount`，未达时不得执行 stored plan，达到 `maxResumeAttempts` 转 manual terminal。其余分类由 `decideDisposition` 转成 durable consumed/superseded/retryable/manual；pre-plan retry 写 lane `blockedUntil`，superseded 与 retry 各有 exact cap。两个函数相同输入纯且 exact boundary 一致；reasonCode 与 false-proposal 标记写入 terminal attempt，供 P5 读取。
+- 验收：`resume-backoff-exact-values`、`resume-cap-becomes-manual`、`planned-transient-keeps-same-attempt-and-opids`（T77）、`retry-backoff-exact-values`、`retry-cap-becomes-manual`、`superseded-cap-becomes-manual`、`deterministic-admission-rejection-consumes-nochange`（T86）、`admission-rejection-retains-code-for-quality-score`、`transient-admission-read-failure-retries`、`stale-target-supersedes-before-first-write`、`user-skip-consumes`。
+
+#### `transitionClaim/transitionResumeDeferral/transitionDisposition/transitionRelease/transitionManualRelease`
+- 拓扑：P3-D11；调用 D10 的 durable decisions。
+- 职责：在一个 immutable lane 输入上计算 next lane 与 typed result；不读时钟、storage 或 ledger。claim 更新 desired=max 并按 manual/blocked/inFlight/due 顺序判定；resume deferral 只更新匹配 inFlight；consumed 以 max advance；release 只清匹配 attempt；manual retry/skip 需要 durable CommandId。所有 exact boundary 先在纯函数层钉死。
+- 验收：`transition-claim-priority-pinned`、`transition-resume-deferral-keeps-attempt`、`transition-consumed-advance-max`、`transition-release-mismatch-noop`、`transition-manual-release-requires-command-id`。
 
 #### `class ReviewCursorStore`
-- `claim(sessionId, desiredThrough): Promise<ClaimResult>` — 单 RMW：`desiredThroughSeq=max(old,incoming)`；`attemptNo = (上一个 attemptNo ?? 0) + 1` durable 分配；inFlight 缺席 → `{kind:'acquired', attemptId, attemptNo, range}`；resumable → `{kind:'resume', attemptId, range}`；running → busy（不 spawn）；无 due → nothing-due。
-- `advance(attemptId, effectiveThrough)` — **单调**：`reviewedThroughSeq = max(old, effectiveThrough)`（第八轮 S1-5：advance-twice-is-noop，T67——crash 于 advance 与 markFinalized 之间时 recovery 可安全重复）；由 `markFinalized` 前的 finalization 序列调用，仅 disposition=consumed。
-- `settleRunning(attemptId, 'cancelled'|'committed'|'failed')` — settlement：planning 取消清 inFlight；planned/committing 转 resumable（T39 语义不变）。
-- `recover(sessionId)` — 启动期恢复；运行期结算走 settleRunning。
-- 验收：`claim-acquired-busy-nothing-due`（T29）、`claim-allocates-attempt-no`（T50）、`claim-desired-through-max`、`claim-resume-resumable`、`settle-cancelled-clears-inflight`、`advance-only-effective-through`、`advance-twice-is-noop`（T67）、`recover-resumes`。
+- 拓扑：P3-D12；每个写方法只在 storage update 内调用 D11 对应 transition。
+- `claimDue(sessionId,desiredThrough,now,laneKey)`：一个 RMW 更新 desired=max；manual→held；blocked→deferred；running→busy；resumable→resume；无 due→nothing；否则分配 attemptNo/inFlight acquired。
+- `deferResume(attemptId,resumeDecision)`：只更新匹配 inFlight 的 resume gate；不 terminal、不 release、不分配新 attempt。
+- `applyDisposition(attemptId,decision,effectiveThrough)`：idempotent；consumed 用 max advance 并清 since-advance gates；retry/supersede/manual 写 exact durable gate但保留 inFlight。
+- `releaseAttempt(attemptId)`：只清匹配 inFlight，重复 no-op；不得自行判断 finalized。
+- `releaseManualHold(sessionId,commandId,retry|skipThrough)`：用户命令；skip 记录 consumed through，retry 清 gate但不 advance。
+- 验收：`claim-acquired-busy-resume-nothing`、`resume-not-runnable-before-resume-blocked-until`、`resume-runnable-at-boundary-with-same-attempt`（T77）、`retry-not-claimable-before-blocked-until`（T77）、`retry-claimable-at-blocked-until`、`retry-and-resume-backoff-survive-restart`、`manual-hold-requires-governance-release`、`desired-through-growth-does-not-bypass-block`、`advance-twice-is-noop`、`release-mismatched-attempt-noop`。
+
+#### `class ReviewClaimCoordinator`
+- 拓扑：P3-D13；调用 D12 `ReviewCursorStore`。
+- 职责：host 内唯一 claim 入口，串行执行 durable lane scan 与 `claimDue`。已有 inFlight 的 resume 不占新容量；新 acquired 只有在 durable occupied lane 数小于 required `maxConcurrentReviews` 时允许。startup 从 lane records 重建占用数；cleanup/finalization reconciliation 未完成时关闭新 acquired，但允许既有 attempt resume/cleanup。一个 attempt 的 plan op 数受 schema `maxPlanOps` 限制，因此 P1/P2 review pending receipt 总量上界为 `occupied lanes × maxPlanOps`；不依赖淘汰未完成 receipt。首版不支持多 Host，不能把本协调器宣称为分布式 semaphore。
+- 验收：`claim-coordinator-serializes-live-and-history`、`durable-inflight-count-enforces-cap`（T85）、`resume-at-cap-does-not-consume-new-slot`、`restart-rebuilds-capacity-from-lanes`、`cleanup-failure-closes-new-acquisitions`、`pending-review-receipts-bounded-by-inflight-and-plan-cap`（T85）。
 
 #### `class ReviewLedgerStore`
-- `putAttempt(attempt)` — append-only；`baseStateDigest` 在 ReviewInput 构建后回填（`recordBaseState(attemptId, digest)`）；**`effectiveThrough` 在 LearningView 完成后、planner 启动前随 attempt 持久化**（S1-6：terminal-recovery 唯一推进依据，禁止恢复期按当前 budget/projection 配置重算）。
-- `markOpState(attemptId, state: ReviewOpState)` — saga 落账（`{ opId, resource: 'memory'|'skill', resourceRef, state: prepared|applied|duplicate|failed }`；ledger 缺席 = not-started，第八轮 S1-4）——Ledger 自此是 saga recovery authority。
-- `markFailed(attemptId, code, meta)` / `latestValidAttempt(rangeId)`。
-- `markTerminal(attemptId, status, rangeDisposition: consumed|superseded|retryable|manual)` — terminal + 处置落账（第八轮 S1-6/T68）。L1 映射：committed（含 noChange）→ consumed；stale-base/budget → superseded；admission/policy 拒绝、planner 瞬态、前台取消 → retryable（attemptCount/nextRetryAt 背退）；manual 预留 L2。
-- `markFinalized(attemptId)` — **本 terminal attempt 全部恢复义务完成的 durable 终点**（第八轮 S1-5/T67）：finalization 序列（ack applied receipts → disposition=consumed 时 advance → 清 inFlight）成功后落账；此后 recovery 不再重放该 attempt。
-- finalization ack：orchestrator 从 `opStates` 取 `resource=memory && state ∈ {applied, duplicate}` 按 scope 分组调 `memory.acknowledgeTerminalOps`，`resource=skill` 同规则按 ref 分组调 `skillManaged.acknowledgeTerminalOps`（**applied-only，非 plan 全量**——partial-saga 与零 mutation terminal 不误报 `invalid_structure`，T66）。
-- 验收：`attempt-append-only`（T40）、`base-state-digest-postclaim`（T50）、`effective-through-persisted-pre-planner`（T59）、`opstate-review-type-pinned`（T66）、`terminal-disposition-mapping-l1`（T68）、`planned-boundary-persists-plan`、`recover-from-planned-never-recalls-model`、`recover-from-planning-allows-replan`、`latest-valid-attempt-picked`、`terminal-ack-invoked-scoped`（T52/T58）、`terminal-ack-only-applied-opstates`（T66）、`terminal-finalization-is-idempotent`（T67）。
+- 拓扑：P3-D14。
+- 职责：attempt record 永不删除，字段通过原子 RMW 单调增补；LearningView 后、planner 前写 effectiveThrough/outcomes/base digest；validated planner result以落定后 immutable 的 plan + identity version + plan digest 进入 planned boundary；`markOpState` 单调；`markTerminal(attemptId,decision)` 持久化 exact decision；`markFinalized` 幂等。Service ready 前先建立 ledger domain 的 singleton counter table record `{next:'1'}`，此时尚不开放 claim；counter/ordinal 是无前导零的正十进制 branded string，durable schema fail-closed，`KvTable.update` 内取当前 next 作为本次 ordinal、用 `BigInt` 加一并立即转回 string，不受 JavaScript safe-integer 上限影响。`ensureFinalizedOutcomeIndexed(attemptId)` 只接受 finalized attempt：先原子分配 ordinal，再用 attempt RMW 仅在字段缺失时写入。counter 已递增而 attempt 尚未写入，或同 attempt 并发分配败方，只留下 gap；重试不得改写已存在 ordinal。ordinal→attempt 表只是查询投影，`rebuildFinalizedOutcomeIndex` 从 attempt 的 retained ordinal 补缺、检测重复 ordinal，并保证 counter.next 严格大于已见最大 ordinal；它不是第二 outcome authority，也不改变已分配 ordinal。`listFinalizedOutcomeSignals({afterOrdinal,limit})` 按 ordinal 数值升序分页，只投影 finalized attempt 中的 Host outcome 及原 durable 坐标，不重新运行 planner；后续 finalized attempt 只能追加在 checkpoint 之后，无需全表 cycle，也不要求 P4 永久保存所有历史 signal id。
+- provenance：attempt 是 review op authority；`GovernanceOperation` 是 direct memory governance authority。同 CommandId 先查 authority status，applied 直接重放结果、prepared 先 reconcile、failed 重放同一失败，均早于 current target/base 检查。派生 index 在 authority record 后写；`rebuildProvenanceIndex` 扫 authority records补缺，冲突 invalid_structure。
+- 验收：`attempt-record-retained-and-transitions-monotonic`、`effective-through-persisted-pre-planner`、`planned-boundary-persists-immutable-plan`、`recover-from-planned-never-recalls-model`、`opstate-monotonic`、`terminal-decision-immutable`、`finalized-outcomes-retain-turn-and-event-coordinates`、`unfinalized-outcomes-not-exported-to-curator`、`outcome-ordinal-schema-rejects-zero-negative-leading-zero`、`counter-record-initialized-before-claims`、`counter-increments-beyond-max-safe-integer`、`concurrent-finalized-attempts-get-distinct-ordinals`、`finalized-outcome-pages-append-by-ordinal`、`counter-crash-before-attempt-write-leaves-safe-gap`、`assigned-outcome-ordinal-never-changes`、`duplicate-outcome-ordinal-fails-loud`、`outcome-index-rebuild-preserves-checkpoints`、`late-finalized-attempt-appends-after-checkpoint`、`opid-resolves-source-attempt-after-restart`（T84）、`receipt-eviction-does-not-break-provenance-query`、`provenance-index-crash-gap-rebuilds`、`provenance-conflict-fails-loud`。
 
-## 4. ReviewRuntime（编排）
+#### `groupFinalizedReceipts(opStates): {memoryGroups,skillGroups}`
+- 拓扑：P3-D15。
+- 职责：只选 ledger 已 finalized attempt 的 applied|duplicate opState；memory 按 scope、skill 按 ref；prepared/failed/not-started 不 cleanup。
+- 验收：`finalized-ack-only-applied-opstates`（T66/T85）、`zero-mutation-finalized-has-no-ack-call`、`groups-never-cross-resource-or-scope`。
 
-#### `maybeDispatch(agent)` / `onForegroundTurn(agent)`
-- 抢占 + settlement 同 RC5.3（T39 语义不变）：planning 取消清 inFlight；planned/committing 转 resumable 续 stored plan。
-- 验收：`async-dispatch-no-mid-turn-append`、`foreground-preempts-background`、`cancel-before-planned-clears-inflight`、`cancel-after-planned-resumes-stored-plan`、`same-process-next-turn-not-permanently-busy`、`foreground-wait-bounded`。
+#### `finalizeAttempt(attemptId)` / `reconcileReviewState(sessionId)`
+- 拓扑：P3-D15；调用 D10、D12–D14 与 P1/P2 finalized-ack。
+- finalization：ledger markTerminal 已持久化 decision → cursor applyDisposition → ledger markFinalized → `ensureFinalizedOutcomeIndexed` → 以 finalized attempt 的 applied|duplicate opStates 调 P1/P2 `acknowledgeFinalizedOps` → cursor releaseAttempt。Review receipt 在 `markFinalized` 成功前一直留在不淘汰 pending；cursor 在 outcome 可分页发现且 cleanup 成功前一直 occupied。
+- reconciliation：先扫描 terminal&&!finalized，重放 persisted disposition 并 mark finalized；再为全部 finalized attempt 补齐 stable ordinal/derived index；再检查 cursor occupied：ledger finalized 且已 indexed→重放 finalized receipt cleanup（receipt 两无也可表示已 cleanup 后合法淘汰）→release，绝不 resume plan；planned/committing→按 persisted resume gate 续同一 attempt，planning crash→pre-plan retry policy。D14 outcome mutex 串行 `markFinalized→ensure index`、显式 `reconcileFinalizedOutcomeIndex` 与 page read，query 不会观察 finalized-but-unindexed 中间态，也不以 read 方法暗藏修复写入。P4 每次 outcome page scan 前显式调用 reconciliation；失败时不读 page、不推进 checkpoint并记 coverage gap。全部 lane 分类完成前不接受新 acquired；index/cleanup 失败保持 gate closed并告警，但正常前台 Agent 不受阻。
+- 验收：`terminal-finalization-is-idempotent`、`review-receipt-stays-pending-until-ledger-finalized`（T85）、`crash-after-finalized-before-index-recovers`、`index-failure-keeps-cursor-occupied-and-acquisition-closed`、`crash-after-index-before-ack-recovers`（T72/T85）、`crash-after-ack-before-release-recovers-after-ring-eviction`（T85）、`finalized-occupied-cleans-receipts-then-releases-not-resumes`、`startup-reconciles-before-new-claim`、`outcome-mutex-hides-finalized-before-index`、`outcome-page-read-performs-no-durable-write`、`cleanup-failure-blocks-new-review-not-foreground-agent`、`finalization-crash-injected-after-every-durable-write`、`terminal-status-does-not-imply-range-consumption`、`terminal-recovery-uses-persisted-effective-through`。
 
-#### `async ensureReviewThrough(agent, seq): Promise<void>`
-- 验收：`blocking-completes-before-first-request`（T30）、`blocking-failure-still-calls-next`。
+## 8. Planner 与 runtime
 
-#### `async runReview(cursor): Promise<void>`
-- claim/resume → LearningView → **`effectiveThrough` 随 attempt 持久化（S1-6，planner 前）** → ReviewInput（**含 `enabledScopes`（L1=`['project']`）与 currentMemory/writableSkills；state 不可作 evidence**）→ `baseStateDigest` 回填 → 预算闸 → `startPlanner`（两阶段 patch；create 门）→ `gateResult` → admissibility → **whole-plan admission**（不可 admissible/冲突/超预算/超 plan 上限/plan 内重复触及同一 skillId/`target:'user'` 命中 L1 backstop → 整 plan zero commit，原因落 ledger）→ stale 重读检查（失配 → 新 attempt replan）→ **opId = `deriveOpId(attemptId, resourceKind, stableOpIndex, canonicalOpDigest)`（第八轮 S1-3，模型不提供 opId）** → **forward-recovering saga commit**（memory `applyOps`；skill 经 ManagedSkillService：`ManagedSkillRef` 定位 + receipt 查重 + 完成标记协议，失败不回滚）→ `markOpState`（`ReviewOpState` 落账）→ **finalization 序列（第八轮 S1-5/S1-6）**：`markTerminal(status, rangeDisposition)` → ack applied-only receipts（memory 按 scope 分组 + skill 按 ref 分组，T66）→ `advance(effectiveThrough)` **仅 disposition=consumed**（单调 max-guard）→ `markFinalized` → 释放 inFlight。
-- 失败分类：拒绝类不重试（disposition=retryable 背退）；`stale_base_revision` → 限次新 attempt（superseded）；**`budget_exceeded` → zero commit → consolidation 生成新 whole attempt 重走 admission（`maxConsolidationAttempts` 默认 2），仍败 terminal 零 commit——skill op 绝不"顺带"提交（S1-11，T51）**；transient backoff；foreground 取消 settlement 不计失败（retryable）；超限 failed-terminal。
-- **terminal-recovery（第八轮 S1-5/S1-6，T66–T68）**：`recover(sessionId)` 先重放全部 `terminal && !finalized` 的 attempt——ack applied-only receipts（幂等）→ disposition=consumed 时 `advance(effectiveThrough)`（单调，重复安全）→ 清 inFlight → `markFinalized`；**superseded/retryable/manual 一律不推进 high-water**——range 由下次触发重 claim（at-least-once，宁重审不跳审；budget consolidation 的 attempt A 在 B 建立前 crash 时 A=superseded，恢复不吞 range，B 语义由重 claim 的新 whole attempt 承接）。完成前不接受新 review mutation。
-- 验收：`saga-happy-path`、`admission-all-or-nothing-no-partial-commit-start`、`plan-duplicate-skill-target-zero-commit`、`memory-committed-skill-write-fails-recovery-finishes`、`skill-committed-ledger-mark-crash-reconciles`、`cross-resource-failure-never-rolls-back-by-guess`、`saga-planned-boundary-recovers-without-model`、`saga-crash-gap-resource-idempotent`、`saga-stale-replan-new-attempt`、`saga-budget-consolidation-new-whole-attempt`（T51）、`consolidation-failure-keeps-whole-attempt-zero-commit`（T51）、`saga-two-phase-patch-uses-exact-content`、`saga-range-never-skips`、`terminal-acks-memory-receipts`（T52）、`op-id-stable-across-planned-recovery`（T62）、`terminal-ack-only-applied-opstates`（T66）、`terminal-recovery-replays-unacked`（T58）、`terminal-recovery-advances-persisted-effective-through`（T59）、`terminal-finalization-is-idempotent`（T67）、`terminal-status-does-not-imply-range-consumption`（T68）。
+#### `resolveReviewProvider(ctx,config): ReviewProvider`
+- 拓扑：P3-D16。
+- 职责：load-time 取得 provider；要求 `inheritsParentContext=false`，capabilities 的 agentOptions/outputSchema/depthLimit/toolFilter/persona 全 true；否则 `unsupported_review_provider`。不提供 fallback。
+- 验收：`review-provider-must-be-fresh`（T70）、`review-provider-must-support-all-enforced-options`、`missing-provider-fails-load`。
 
-#### `startPlanner(input, config)` / `gateResult(result)`
-- `agentOptions` 携 `{model?, maxTokens}`；gate：completed + structured + schema parse；plan 六项硬上限（schema + host 双层）；persona 不变式（no-op 中性 + `enabledScopes` 声明，S2-4 输入侧）。
-- 验收：`planner-request-shape-pinned`、`output-tokens-wired`、`gate-terminal-zero-mutation`、`plan-ops-capped-schema`、`plan-ops-capped-host`、`persona-noop-invariant-pinned`、`input-declares-enabled-scopes`（S2-4）。
+#### `startPlanner(parent,input,config)` / `gatePlannerResult(result)`
+- 拓扑：P3-D16。
+- 职责：请求固定 `toolFilter:{allow:[]}`、`maxDepth:1`、output schema、persona、`agentOptions:{model?:reviewModel,maxTokens}`；provider route继承 parent，当前没有 reviewLlmProvider。gate 要求 completed+structured+schema；run token total 超限 dispose。真实 child final request snapshot 包含明确 ReviewInput 与不可避免 inherited standing sections；standing/current state 不可引用。
+- 验收：`planner-tool-list-is-empty`（T70）、`planner-tool-execution-is-denied`、`planner-has-no-parent-conversation-history`、`planner-standing-context-is-explicitly-snapshotted`、`planner-request-shape-pinned`、`gate-terminal-zero-mutation`、`output-tokens-wired`。
 
-## 5. 治理命令（`src/governance.ts`；双语义 approve，S1-9）
+#### `class ReviewRuntime`
+- 拓扑：P3-D17。
+- `ensureReviewThrough(agent,seq)`：在 `agent.runMaintenance` owner 下 reconciliation→claim→run；blocking caller失败仍 delegate。
+- `runReview(claim)`：create attempt → projection/outcome/effectiveThrough durable → current resource views/base durable → planner → gate/store immutable plan → enumerate/derive IDs → whole-plan admission → shadow/noChange/rejected noChange 或 fixed-order forward saga（memory 后 skill）→ each resource result mark opState → persisted disposition → finalization。
+- recovery：planned/committing 使用 stored plan/op ids，绝不召回模型；resource success/ledger crash由 receipt duplicate吸收。immutable plan 后的瞬态故障 defer 同一 inFlight，partial saga 不回滚也不新建 attempt；在任何 op applied 前出现 stale 可 supersede，新 whole attempt 重规划；已有 applied op 后的 stale/invariant failure 进入 manual，等待用户 retry/skip，不能把部分提交伪装成 zero-commit。只有 terminal decision 才进入 finalization。
+- 验收：`saga-happy-path`、`no-resource-write-before-plan-persisted`、`memory-committed-skill-write-fails-recovery-finishes-same-attempt`、`partial-saga-transient-never-replans`（T77/T85）、`partial-saga-stale-enters-manual`、`resource-success-ledger-crash-duplicates`、`saga-planned-boundary-recovers-without-model`、`saga-range-never-skips`、`saga-stale-before-first-write-replans-new-attempt`、`saga-budget-consolidation-new-whole-attempt`、`unresolved-failure-zero-visible-learning`、`unresolved-false-proposal-consumes-rejected-nochange`、`no-signal-empty-plan-consumes-nochange`、`rollout-lanes-never-promote-shadow-plan`。
 
-- `list` — draft + active-pending 全量（含 diff 基准）；`show <id>` — base vs draft / current vs pending。
-- `approve <id>` — 双语义：draft → `promoteDraft`；active+pending → `activatePending`（四字段原子切换，S1-4）；二者全重验（revision/ownership/digest/scan/conflict/policy）后走 Service CAS。
-- 定位：命令从 session cwd 解析 projectKey + skillId 组 `ManagedSkillRef`（S1-1），不裸传 id。
-- `reject <id>` — draft → `rejected`；pending → 清除。`reopen <id>` — rejected → draft。全部仅用户治理；模型工具面无治理动作。
-- 验收：`governance-list-shows-drafts-and-pending`、`governance-approve-draft-promotes`、`governance-approve-pending-activates`（T49）、`governance-approve-revalidates-all`、`governance-approve-stale-base-fails-loud`、`governance-reject-draft-and-pending`、`governance-reopen-rejected`（T48）、`governance-absent-from-model-tool-surface`。
+#### live trigger 与 foreground settlement
+- 拓扑：P3-D18。
+- 职责：resume-async/resume-blocking/maintenance 三模式；每个入口先 D02 root predicate；planning foreground cancel→retry settlement，planned/committing→resumable stored plan；bounded wait；child lifecycle不触发。
+- 验收：`async-dispatch-no-mid-turn-append`、`foreground-preempts-background`、`cancel-before-planned-clears-inflight`、`cancel-after-planned-resumes-stored-plan`、`same-process-next-turn-not-permanently-busy`、`review-child-never-dispatches`（T71）。
 
-## 6. user-target backstop（S2-4，T53）
+## 9. 冷历史协调器
 
-- 输入侧：L1 ReviewInput `enabledScopes=['project']` + persona 声明——planner 不被邀请投 user proposal。
-- backstop：admission 命中 `target:'user'`（rollout < L2）→ proposal 落 ledger + **整 plan zero commit** + `target_scope_disabled`；不静默 drop、不降级写 project。
-- 验收：`user-target-backstop-l1`（T53）、`user-target-not-invited-at-l1`（输入侧断言）。
+#### `enumerateHistoricalReviewWork(records,checkpoint,config): HistoricalPage`
+- 拓扑：P3-D19。
+- 职责：稳定按 `{createdAt desc,id}`；root/persisted/cwd/project/time/preset/control 过滤；bounded page；checkpoint 在每项成功或明确跳过后推进，到尾新 cycle；列表变化最迟下一 cycle 发现，per-session cursor 才是完成真相。
+- 验收：`maintenance-discovers-cold-root-sessions`（T79）、`maintenance-excludes-child-sessions`、`maintenance-honors-project-time-and-rate-limits`、`maintenance-checkpoint-survives-restart`、`new-session-behind-checkpoint-found-next-cycle`、`maintenance-opt-out-stops-new-claims`。
 
-## 7. Config（schemastery）
+#### `resolveHistoricalAgentOptions(observation): AgentOptions`
+- 拓扑：P3-D19。
+- 职责：用既有 `foldRequestHeader(events)` 恢复最后 provider/model/reasoning route；有历史 turn 却无可恢复 route则 fail-loud，不回落到另一个 provider；真正无 request 的空 session本就不 eligible。避免 history 内容被静默送往不同 provider。
+- 验收：`historical-resume-uses-recorded-provider-route`、`unavailable-recorded-route-does-not-fallback-cross-provider`、`reasoning-effort-restored-when-user-owned`。
 
-字段全带 JSDoc；除标注默认者外全部 required（无静默默认，总纲 §1）。plan 硬上限 schema 与 host 双层同源取本表（`startPlanner` 验收 `plan-ops-capped-schema`/`plan-ops-capped-host`）。
+#### `HistoricalReviewCoordinator.runPass(signal)`
+- 拓扑：P3-D19。
+- 职责：`sessionQuery.listSessions/observeSession({projectionMode:'all'})`；读取 projected latest preset；live Agent 复用，cold Agent 用 `agents.resume` + `agentPresets.mount`；review 到 observation cursor；只 dispose 自己创建的 handle；live/history 共用 claim，busy 留待下一 pass；cost/rate/token cap 和 abort。
+- 验收：`historical-resume-mounts-projected-preset`、`maintenance-and-live-review-do-not-double-claim`（T79）、`historical-disposes-owned-agent-only`、`historical-abort-preserves-checkpoint-at-last-settled`、`historical-budget-stops-before-next-resume`。
 
-| 字段 | 语义 |
-|---|---|
-| `triggerMode` | `'resume-async'`（默认）\| `'resume-blocking'` \| `'maintenance'`——触发装配入口 |
-| `reviewProvider` / `reviewModel?` | 子代理 provider（默认 `'spawn'`）/ 可选模型路由 |
-| `maxLearningViewTokens` / `maxReviewOutputTokens` / `maxReviewTotalTokens` | LearningView 预算 / 接线 `agentOptions.maxTokens` / usage 观察累计上限（超限 `run.dispose()`） |
-| `debounceMs` | turn/end 去抖 |
-| `policyVersion` / `learningViewVersion` | 游标与 RangeId 身份参与者（hash 入参） |
-| `persona` | 静态文本（snapshot 钉死；no-op 中性 + `enabledScopes` 声明，S2-4） |
-| `rolloutLevel` | `'shadow'`（默认）\| `'conservative'` \| `'autonomous'`——shadow 下 saga commit 步零 mutation、proposal 全落 ledger、high-water 照常推进 |
-| `maxConsolidationAttempts` | budget consolidation 新 attempt 上限（默认 2） |
-| `maxAttemptsPerRange` / `retryBackoffBaseMs` | retryable 背退上限与基时（超限 failed-terminal） |
-| `maxPlanMemoryOps` / `maxPlanSkillOps` / `maxFilesPerSkill` / `maxFileBytes` / `maxEvidenceRefsPerProposal` / `maxSpanBytes` | plan 六项硬上限（schema + host 双层）与证据上限 |
+## 10. 人类治理与 provenance
 
-## 8. session-query 默认过滤（上游包 fork 修改）
+#### memory/skill/review command handlers
+- 拓扑：P3-D20；全局 commands registry，模型无同名工具。
+- memory：list/show/correct/remove；correct/remove先写 GovernanceOperation prepared，以 CommandId 派生 op id，exact state revision+entry digest，调用 `MemoryService.applyDirectOps`，再 mark applied；如 mark applied 失败，该 memory scope 立即进入 governance-blocked，P3 不再接受该 scope 的 direct command 或 review memory commit，直到 `reconcileGovernanceOperations` 以 terminal receipt 重放资源调用并写 applied。启动在新 command/review claim 前处理全部 prepared，因而 bounded receipt 不会在权威记录落定前被任何后续 terminal receipt 淘汰。可确认的验证失败写 failed；show解析 review/governance provenance与 evidence spans。
+- skill：list/show/approve/reject/reopen/restore；approve全重验；show 通过 P2 `resolveMutationProvenance` 解析 direct-tool session/call，或用 review opId 回到 ReviewAttempt；restore调用 P2 actor governance。review：enable/disable、retry、skip；skip明确记录用户授权 consumed through。
+- 验收：`memory-show-resolves-source-attempt`、`memory-correction-uses-id-and-digest`（T80）、`memory-correction-removes-old-content-from-next-snapshot`、`memory-remove-is-user-governance-only`、`governance-operation-crash-reconciles`、`governance-authority-duplicate-before-current-target`、`governance-ledger-failure-blocks-direct-and-review-scope-until-reconciled`、`prepared-remove-reconciles-before-any-receipt-eviction`、`governance-show-renders-source-spans`（T84）、`skill-show-resolves-direct-tool-after-receipt-eviction`、`skill-show-resolves-review-attempt`、`skill-restore-user-only`（T82）、`manual-hold-requires-governance-release`、`governance-absent-from-model-tool-surface`。
 
-`tool-session-query` 未显式 `includeChildSessions: true` 时默认附加 `{kind:'parent', values:[null]}`；`ctx.sessionQuery` 服务不改。验收：`tool-default-root-only`、`tool-explicit-optin`、`host-unfiltered`。
+## 11. Config 与 Service assembly
 
-## 9. 验收门（Phase 出口）
+Config fields 全 JSDoc：`triggerMode`；`reviewProvider` 默认 spawn、`reviewModel?`；token budgets；debounce；`policyVersion/learningViewVersion/rolloutLevel`；persona；`maxPlanOps/maxConcurrentReviews` 与 plan/evidence hard caps；pre-plan retry、stored-plan resume backoff/max attempts、max supersede/max consolidation；eligible presets/projects/time；historical enabled/batch/interval/rate/token cap；control defaults。`maxPlanOps × maxConcurrentReviews` 的乘积必须为 safe integer 并受明确上限，防止配置本身取消 pending bound。review provider capability在 load-time 验证，不能首次触发才发现。
 
-附件测试全绿 + 100% 覆盖；REAL boot 全链（双 mock 模型；blocking 顺序、settlement 恢复、planned 崩溃恢复、**finalization 链各边界 crash 注入**、跨资源失败 saga 续完、consolidation 新 attempt、治理双语义 approve/reject/reopen）；snapshot（child 终请求逐字节、persona、schema 拒绝文案）；doc-sync + Agent Note + 双 SDK；Known Limitations：child 继承父 standing prompt 环境、治理为最小宿主命令面、L1 不邀请 user proposal、**首版 crash model = Host/process crash + restart（`fs-local/src/fsio.ts:546-594` staged + atomic rename；不断言 power loss / kernel crash / storage 故障下的分布式事务保证）**、manual disposition 在 L1 无产生点。
+#### `class SessionReviewService extends Service`
+- 拓扑：P3-D21。
+- 职责：唯一 review domain opener；持有 cursor/ledger/claim coordinator/runtime/history；注册 host lifecycle listeners、commands 与 maintenance；向 P4 公开显式 maintenance `reconcileFinalizedOutcomeIndex` 与无写入 paged `listFinalizedOutcomeSignals`，两者和 finalization 共用 D14 outcome mutex；启动完成 D15 review reconciliation、D20 governance reconciliation、outcome/provenance index rebuild 与 durable inFlight capacity rebuild 后才允许新 acquired；reconciliation 故障只关闭 review acquisition，不阻断正常 Agent；所有 effect/disposer HMR-safe。
+- 验收：`review-service-single-registration`、`review-domain-opened-once`、`not-ready-before-reconciliation`、`host-mount-observes-multiple-root-agents`、`hmr-stops-live-and-history-work`。
+
+Phase 出口：T70–T80/T83–T86 中属 P3 的全部测试、原 P3 tests、100% coverage；REAL boot 注入每个 durable finalization 边界、finalized ack 后 ring 淘汰、live/history竞态、planner final request、memory correction、unresolved failure、shadow→conservative新 lane；四条 keyless snapshot：纠错旧 memory、failure→recovery、unresolved 零可见、review child 工具/standing context；README/Agent Note 与必要双 SDK/doc gates 全绿。

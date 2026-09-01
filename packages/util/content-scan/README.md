@@ -29,6 +29,7 @@ Call `scanContent(text, scope)` at a content gate, then fold the findings with `
 ```ts
 import { scanContent, scanVerdict } from '@deepseek-ai/dsh-content-scan'
 
+const entryText = 'Run pnpm run test:docs before committing documentation.'
 const findings = scanContent(entryText, 'memory')
 if (scanVerdict(findings) === 'blocked') {
   // reject the write, naming the finding ids

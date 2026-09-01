@@ -1,104 +1,176 @@
-# RC5.5 附件 P2 — skill-managed Service（函数级规格）
+# RC5.5.3 附件 P2 — skill-managed Service（函数级规格）
 
-> 上位：`RC5.5-函数级规格总纲.md`；架构依据 `自我进化机制-RC5.5-方案.md`（第六轮 S1-3..S1-5、S1-7..S1-9、S2-1/S2-2；第七轮 S1-1..S1-4）。
+> 上位：`RC5.5-函数级规格总纲.md`；前置：P1；包：`packages/skill/skill-managed`；日期：2026-09-01。
 >
-> 包：`packages/skill/skill-managed`——default export **`ManagedSkillService extends Service`**（唯一 `dsh.skill-managed` 域 opener，拥有 Store/NameIndex/Provider/AuthoringCore）；named export `skill_manage` 工具插件（authoring preset，经 Service 消费）。P3 零搬迁，session-review 直接成为第三消费者。
->
-> 依赖：`ctx.fs`（writeText/readText/resolve，无 move/delete——`FsWriteIntent.createIfAbsent` 见 `fs/fs/src/types.ts:123-125`）、`ctx.storageDomain`、`ctx.skills`（`registerProvider`，`skill/src/index.ts:391-400`）、`scanContent`。
->
-> 相对 RC5.4-P2（第七轮收口）：一切 API 走 `ManagedSkillRef` 禁止裸 `SkillId`（S1-1）；revision 改 op-derived `ManagedRevisionId` + 完成标记协议（S1-2）；provider 可见谱系 = `active | stale`（S1-3）；`pendingRevision` 四字段 + 未决互斥（S1-4）；get 的 definition summary 取 candidate 冻结字段。
->
-> 相对 RC5.5-P2（第八轮收口）：`lastAppliedOpId` 单槽退役——跨 session 窗口（A 落账、B 再写、A 重放）下误报 `stale_base_revision`；改 `appliedOps: SkillAppliedOps` 与 Memory 对称（CAS 同笔落账、查重 pending ∪ recentTerminal、`acknowledgeTerminalOps({ref, opIds}[])`，T65）；`NameIndex` 值改 `NameReservation{skillId, reservedByOpId}`——create 同 op 重入 resume、异 op `name_conflict`（T64）；opId 由 `deriveOpId` 供给（T62/T63）。**开工顺序：先红 T62/T64/T65 三组，再写 mutation path**（第八轮裁定）。RC5.5.2 修补：新增 `transitionManagedSkill` 函数规格（此前总纲/方案/P4/本附件验收名四处引用而零处有签名）；Config `stagingRootName` 更名 `managedRootName`；状态机不变式补 `pinned` L1 无产生点声明。
->
-> 日期：2026-08-29（RC5.5.1 增补 2026-08-30；RC5.5.2 修补 2026-08-30）
+> package default export 是 host 级唯一 `ManagedSkillService`；named `skill_manage` 是 authoring preset 的薄工具插件。P2 不导入 `session-review`，review caller 只传结构相同的 branded `OpId` 与 `origin.kind='review'`。
 
 ## 1. 模块布局
 
 ```text
-src/index.ts          # default export ManagedSkillService；named export skill_manage 插件
-src/types.ts          # ProjectKey/SkillId/ManagedSkillRef/ManagedRevisionId/ManagedSkillRecord/NameIndex/CatalogSummary 等
-src/provider.ts       # ManagedSkillProvider implements SkillProvider（storage-only list；visible = active|stale）
-src/store.ts          # ManagedSkillStore（ManagedSkillRef 定位 + record CAS + ensureNameIndex/reserveName + readRevision + bundleDigest + 完成标记协议）
-src/authoring.ts      # AuthoringCore（create/patch/promote/activate/reject/reopen/配额/reconcile；duplicate-before-stale）
-src/structure.ts      # validateStructure / validateBundleLayout（纯；完成标记不入 bundleDigest）
-src/paths.ts          # bundle 路径（revisions/<ManagedRevisionId>/）+ resolveProjectKey（fs.resolve targetKey hash）
-tests/*.spec.ts
+src/types.ts       # ids/ref/record/receipt/origin/config
+src/config.ts      # Config validation（含 scanner cap、receipt window）
+src/identity.ts    # project/name/revision/direct-tool op ids + canonical args
+src/paths.ts       # revisions/<ManagedRevisionId>/ paths
+src/structure.ts   # layout/frontmatter/scan/bundle digest
+src/receipts.ts    # pending/direct-terminal placement + finalized cleanup
+src/store.ts       # record/name index/revision I/O/reconcile
+src/provider.ts    # storage-only list + verified get
+src/authoring.ts   # create/patch/governance/lifecycle/quota
+src/tool.ts        # skill_manage
+src/index.ts       # Service opener/provider assembly + named tool exports
 ```
 
-## 2. 核心不变式
+## 2. 类型与状态
 
-- **唯一所有权（S1-3，T44）**：Service 是域唯一 opener；provider/工具/session-review 一律经 Service；第二 open 即 `already-open` fail-loud。
-- **定位传递（S1-1，T55 关联）**：Store/Authoring/治理一切 API 走 `ManagedSkillRef{projectKey, skillId}`，**禁止裸传 `SkillId`**（单向 hash 无法反推 projectKey，storage 键 `skill/<projectKey>/<skillId>` 无从组键）；authoring 入口（create/patch/工具）从 `AuthoringContext{cwd, scope}` 解析 projectKey（同 `resolveMemoryScope` 型），治理/curator 从 record 携带的 projectKey 组 ref；projectKey 解析中间值是 Service 内部实现细节，不做公共类型。
-- **Provider 契约**（T34）：`list(options)` / `get(candidate, options)` 全套校验面 + signal 响应。
-- **list storage-only（S1-5/S2-2，T46）**：candidate 全字段取自 sidecar `catalogSummary`——不读 bundle；外部篡改 revision frontmatter 不影响模型可见 catalog。单条记录损坏 → last-good + `complete:false` + telemetry；整体故障 throw（registry warn+skip）。
-- **可见谱系（S1-3 第七轮，T33/T54）**：provider 可见 = `state ∈ {active, stale}`——stale 是归档倒计时不是隐藏态（tool-skill 每次调用先 re-list，`tool-skill/src/index.ts:134-136`，不可见即无法载入即无法 meaningful-use 复活）；隐藏 = `draft | rejected | archived`。
-- **revision 身份（S1-2 第七轮，T55/T56）**：`ManagedRevisionId = hash(skillId, requestedByOpId)`（requestedByOpId 由 `deriveOpId` 纯派生，第八轮 S1-3/T62——恢复重放同 op 同 id，revision 身份才有可靠根基），目录 `revisions/<revisionId>/`——并发 op 永不共路径（顺序 `n+1` 下败者文件穿插覆盖胜者 bundle）；同 op 重放同路径。写入协议：bundle 文件**全量重写**（同 op 重放内容确定相同，覆写同字节无害）→ **完成标记**末位 `createIfAbsent`（首写者胜）。标记在 → bundleDigest 对比计划：符 → duplicate-continue（重放续走 CAS/ledger），异 → `invalid_structure`（异物路径 fail-loud）；标记缺 → 部分写入（crash 所致），重写补标。fs 无 move/delete（T25），部分写入靠重放补全——禁止裸 createIfAbsent 逐文件判 corruption（会把合法重试砖死，第七轮修正一）。
-- **资源 receipt（第八轮 S1-1，T65/T57）**：`ManagedSkillRecord.appliedOps: SkillAppliedOps { pendingReceipts, recentTerminalReceipts }` 与 Memory 对称——单槽 `lastAppliedOpId` 已退役（跨 session 窗口：A 落账、B 再写、A 重放 → 单槽已被 B 覆盖 → 已发生的 op 误报 `stale_base_revision`；storageDomain 只保证单 record RMW 串行，无跨资源事务）。`SkillOpReceipt { opId, action, revisionId?, resultDigest }` 在 draft 推进/pending 写入/首次 create 的**同一 record CAS** 内入 `pendingReceipts`；patch/create 先查重——`requestedBy ∈ pending ∪ recentTerminal` → 返回已落结果（duplicate），**先于** base revision/digest 校验；attempt terminal 后经 `acknowledgeTerminalOps` 入有界环（ack 输入 = P3 applied-only opStates，第八轮 S1-4）。
-- **create 幂等（第八轮 S1-2，T64）**：`NameIndex` 值 = `NameReservation { skillId, reservedByOpId }`——`reserve(name, skillId, opId)`：不存在 → 占位；同 opId → resume（幂等重入，吸收 reserve 后 bundle 前 crash）；异 opId → `name_conflict`。create 重排：derive 确定性 ref → record receipt 命中 requestedBy → duplicate → op-aware reserve → `writeRevisionBundle`（完成标记吸收部分写入）→ record CAS + receipt。
-- **get = trust transition**（T38/T61）：projectKey 校验 → exact revision（`candidate.locator.revision`）→ 整 bundle canonical digest 对比 locator/sidecar → 失配 `undefined` + invalidate + 告警 → 读边界重扫（blocked 拒）→ definition：**summary/invocation 字段取 candidate 冻结值**（registry 契约即"provider 先前返回的 candidate"，`skill/src/index.ts:262-263`；`SkillCandidate extends SkillSummary` 携带 name/description/whenToUse/invocation，RC5.5 S1-4——并发 approve+invalidate 落在 get 内也不产生 body=N/summary=N+1 错配），content 取 revision。
-- **可见性分离（原则 #9）**：revision 写入 ≠ 可见。draft/pending/rejected/archived 不出 provider；active（及 stale）才出 catalog。
-- **状态机**：`draft | active | stale | archived | rejected`；`draft → rejected`（用户拒绝）；`rejected → draft`（显式 reopen，仅用户）；`archived` 专属曾 active。NameIndex 确定性身份永在（`skillId = hash(projectKey, normalizedName)`）。`pinned` 为用户治理预留位，L1 无产生点（治理命令面无 pin/unpin，恒 false，照 `manual` disposition 先例）；L2 接入用户 pin 命令——Service 层 pinned 门不可绕过（见 `transitionManagedSkill`）。
-- **pendingRevision 四字段 + 互斥（S1-4/S1-9 第七轮，T49/T60）**：`pendingRevision{revisionId, contentDigest, catalogSummary, createdByOpId}`——patch 阶段 record 级 `catalogSummary` 不动（改 description 的 patch 不泄漏进 catalog），approve 单 record CAS 四字段原子切换（pointer/digest/summary/清 pending）；active 且 pending 未决再 patch → `pending_pending_conflict`。draft patch 直接推进 currentRevision（不可见面）。
-- **项目隔离（S1-4 第六轮，T45）**：`resolveProjectKey = hash(ctx.fs.resolve(findProjectRoot(cwd)).targetKey)`；record/locator/storage key 全携带；非 local backend fail-loud（E0-12）。
-- bundle 目录只增不改；`ctx.fs` 无 delete——配额 fail-loud 代替清理；无完成标记的 revision 目录（crash 残留）由重放补全或计 orphan，reconcile 只计数不删除。
-- rank=700 仅同层纵深；provider 挂 host 组合（global 层）；跨层真相由 T36 钉。
+```text
+ProjectKey = Branded<'ProjectKey'>
+SkillId = Branded<'SkillId'>
+ManagedRevisionId = Branded<'ManagedRevisionId'>
+OpId = Branded<'OpId'>
+ManagedSkillRef = {projectKey,skillId}
+ManagedMutationOrigin = {kind:'review',opId} |
+                        {kind:'direct-tool',opId,sessionId,callId}
+SkillAppliedOps = {pendingReceipts:SkillOpReceipt[],recentTerminalReceipts:BoundedRing}
+NameReservation = {skillId,reservedByOpId}
+ManagedSkillState = draft | active | stale | archived | rejected
+ManagedRevisionLineage = {revisionId,contentDigest,createdByOpId,origin,appliedAt}
+PendingRevision = {revisionId,contentDigest,catalogSummary,createdByOpId}
+ManagedSkillEvent = revision-committed{ref,revisionId,opId,activated:false} |
+                    revision-activated{ref,revisionId,opId,activated:true}
+LifecycleRequest =
+  | {actor:'curator',from:'active'|'stale',to:'active'|'stale'|'archived',now}
+  | {actor:'governance',from:'archived',to:'active',now}
+```
 
-## 3. 函数规格
+provider 可见状态固定为 active|stale；draft/rejected/archived 隐藏。curator 不得恢复 archived；governance restore 不得伪装成 usage。`pinned` 阻止 curator 迁移，不阻止用户显式 restore。每个成功 revision 把 immutable `ManagedRevisionLineage` 与 record 指针/receipt 放在同一 record CAS；receipt ring 可淘汰，lineage 不得淘汰，因而 direct tool 的 session/call 来源不依赖 receipt。D01 同时声明 typed host events；D15 只在成功 CAS 后发 revision-committed/activated，事件不是 state authority，P4 观测失败由 coverage gap 保守处理。
 
-#### `resolveProjectKey(cwd, ctx): Promise<ProjectKey>`
-- 职责：`findProjectRoot(cwd)`（无 `.git` 回退 cwd）→ `ctx.fs.resolve(root)` → `hash(targetKey)`；remote backend 抛 fail-loud（E0-12）。
-- 验收：`project-key-git-ancestor`、`project-key-alias-same-key`（T45）、`project-key-remote-fail-loud`。
+## 3. 开发拓扑
 
-#### `class ManagedSkillStore`（Service 内部）
-- `ensureRecord(ref)` / `getRecord(ref)` / `casPutRecord(ref, record, expectedRevision)` — 一律 `ManagedSkillRef` 定位（S1-1）；单 record CAS；首录走 missing-key 协议（T24）；键 `skill/<ref.projectKey>/<ref.skillId>`。
-- `ensureNameIndex(projectKey)` — get → 缺则 `put(emptyIndex)` → 可 update（T24 协议，T47）。
-- `reserveName(projectKey, normalizedName, skillId, requestedBy: OpId): SkillId` — ensure 后单 `update` RMW 写 `NameReservation{skillId, reservedByOpId}`（第八轮 S1-2/T64）：不存在 → 占位；同 opId → resume；异 opId → `name_conflict`；返回 `hash(projectKey, normalizedName)`。
-- `releaseName(projectKey, name)` — reconcile 释放占位残留。
-- `readRevision(ref, revisionId: ManagedRevisionId, relative?)` — host authoring/debug 读通道（draft 回读不经 provider）。
-- `acknowledgeTerminalOps(groups: readonly { ref: ManagedSkillRef, opIds: readonly OpId[] }[]): Promise<void>` — 第八轮 S1-1：逐 ref 读改写 record 的 `SkillAppliedOps`（`splitReceipts` 同型三分，幂等——已入环 duplicate-ack 成功、两无 `invalid_structure`）；输入来自 P3 finalization 的 applied-only opStates（T65/T66）。
-- `writeRevisionBundle(ref, revisionId, files, { retry })` — S1-2 写入协议：`revisions/<revisionId>/` 下 bundle 文件全量重写（覆写同字节无害）→ 完成标记末位 `createIfAbsent`；标记在且 digest 符合预期 → duplicate-continue；标记在而 digest 异 → `invalid_structure`；标记缺 → 重写补标（T56）。
-- `bundleDigest(revisionDir): Promise<string>` — 文件名排序 + 内容 canonical digest（**排除完成标记**）。
-- 验收：`record-cas-conflict`、`record-first-record`、`reserve-concurrent-one-wins`、`reserve-deterministic-id`、`reserve-first-project-initialized`（T47）、`reserve-same-op-resumes`（T64）、`reserve-different-op-conflicts`（T64）、`release-orphan-reservation`、`read-revision-exact`、`revision-path-op-derived-exclusive`（T55）、`partial-bundle-crash-retry-completes`（T56）、`foreign-revision-content-fails-loud`（T56）、`skill-receipt-survives-later-same-skill-op`（T65）、`skill-ack-scoped-and-idempotent`（T65/T66）。
+| 顺序 | 节点 | 只可调用 |
+|---:|---|---|
+| P2-D01 | types/schema + `validateManagedConfig` | P1 content-scan constants、既有 types |
+| P2-D02 | `resolveProjectKey/normalizeName` + paths | D01、existing fs |
+| P2-D03 | `deriveSkillId/deriveRevisionId/canonicalManagedToolArguments/deriveDirectToolOpId` | D01–D02、crypto |
+| P2-D04 | `validateStructure/bundleDigest` | D01、D02 paths、scanContent |
+| P2-D05 | `placeMutationReceipt/splitFinalizedSkillReceipts` | D01 |
+| P2-D06 | Store record/revision primitives | D01–D05、storage/fs |
+| P2-D07 | `ManagedSkillStore.ensureNameIndex` | D06 |
+| P2-D08 | Store reservation/provenance/receipt/reconcile methods | D05–D07 |
+| P2-D09 | `ManagedSkillProvider` | D02、D04、D06–D08、skills registry |
+| P2-D10 | `checkNameConflict/enforceQuotas` | D01–D03、D06–D09、skills registry |
+| P2-D11 | `AuthoringCore.preflightMutations` | D02–D10 |
+| P2-D12 | `AuthoringCore.createDraft` | D02–D11 |
+| P2-D13 | `AuthoringCore.patchDraft` | D02–D11 |
+| P2-D14 | governance/lifecycle/reconcile orchestration | D04–D13 |
+| P2-D15 | `ManagedSkillService` assembly | D06–D14 |
+| P2-D16 | `skill_manage` | D03 direct id、D15 Service、ToolRunContext |
 
-#### `class ManagedSkillProvider implements SkillProvider`（Service 持有并注册）
-- `readonly name = 'self-evolution-managed'`（常量 `MANAGED_SKILL_PROVIDER_NAME` 随 Service 导出）。
-- `list(options): Promise<readonly SkillCandidate[] | SkillProviderObservation>`
-  - 流程：`resolveProjectKey(options.cwd)` → 读该项目 `state ∈ {active, stale}` 记录（可见谱系，S1-3 第七轮——stale 保持可发现，meaningful-use 才有复活通路，T54）→ candidate 全字段取 `catalogSummary`：`{ name, description, whenToUse?, invocation, source:'self-evolution', provider:'self-evolution-managed', rank, locator:{ projectKey, skillId, revision: currentRevision, contentDigest }, path, resourceBase:{ kind:'directory', path: exactRevisionDir } }`。单条损坏 → 跳过 + `complete:false` + warn。
-- `get(candidate, options): Promise<SkillDefinition | undefined>`
-  - 流程：`resolveProjectKey(options.cwd)` ≠ `candidate.locator.projectKey` → `undefined` → 读 `candidate.locator.revision` → `bundleDigest` ≠ `locator.contentDigest` → `undefined` + invalidate + 告警 → 正文读边界重扫（blocked → `undefined`+告警；caution 放行）→ definition（**summary/invocation 取 candidate 冻结字段，content 取 revision**——S1-4 第七轮/T61；registry 契约 candidate 即 provider 先前返回物，`skill/src/index.ts:262-263`）。
-- 验收：`provider-contract-typechecks-against-skill-provider`（T34）、`list-candidate-locator-pins-revision`、`revision-changes-between-list-get-loads-listed-revision`、`get-uses-candidate-frozen-summary`（T61）、`abort-signal-stops-list-and-get`、`provider-list-visible-lineage`（S1-3/T54；原 `provider-list-active-only` 改名改断言）、`stale-remains-discoverable-and-loadable`（T54）、`provider-list-reads-sidecar-not-files`（T46）、`external-frontmatter-tamper-catalog-unaffected`（T46）、`provider-project-a-never-visible-in-project-b`（T35）、`candidate-project-mismatch-get-returns-undefined`、`external-edit-active-skill-refused-on-get`（T38）、`load-boundary-threat-rescan`、`corruption-yields-incomplete-observation`、`provider-promote-appears-after-invalidate`、`same-layer-rank-loses-to-human`（T33）、`cross-layer-shadowing-enumerated`（T36）、`provider-hmr-disposal`。
+D16 必须最后开发；工具不得临时随机生成 requestedBy。D12/D13 依赖 D05 receipt mode，不能在 authoring 内另写一套 pending 逻辑。
 
-#### `validateStructure(bundle, config): StructuralReport`
-- 结构层（blocking）：路径 bundle 相对、禁 `..`/绝对、`SKILL.md` 唯一特权入口、三向字节/数量上限、UTF-8 text only；内容层：`scanContent` severity（blocked 阻断 / caution 警告放行）。frontmatter 解析产出 `CatalogSummary`（E0-10 字段集）。
-- 验收：`structure-path-escape`、`structure-skill-md-required`、`structure-file-count-cap`、`structure-total-bytes-cap`、`structure-binary-rejected`、`structure-severity-caution-passes`、`structure-severity-blocked-rejects`、`structure-shell-snippet-caution-not-block`、`structure-clean-passes`、`structure-summary-extracted`。
+## 4. 叶子、identity 与 validation
 
-#### `class AuthoringCore`（Service 内部；写通道唯一）
-- `createDraft(input: { name, files, authoring: AuthoringContext, requestedBy: OpId })`
-  - 流程：`resolveProjectKey(authoring.cwd)` + derive 确定性 `skillId`/ref → name 过 `SKILL_NAME` → **record receipt 查重（第八轮 S1-2/T64）：record 存在且 `requestedBy ∈ appliedOps` → 返回已落结果（duplicate）** → `checkNameConflict(authoring)` → `store.ensureNameIndex + reserveName(…, skillId, requestedBy)`（同 op resume / 异 op `name_conflict`，T64）→ `validateStructure` → revision 1 = `hash(skillId, requestedBy)`，`writeRevisionBundle` → record CAS put（draft + `catalogSummary` + `SkillOpReceipt` 入 pendingReceipts，同笔落账）→ invalidate → readback 经 `store.readRevision`。
-- `patchDraft(input: { ref: ManagedSkillRef, baseRevision, baseContentDigest, files, requestedBy })`
-  - 流程：`getRecord(ref)`（无 record → unknown）→ **duplicate-before-stale（第八轮 S1-1/T65/T57）：`requestedBy ∈ record.appliedOps（pending ∪ recentTerminal）` → 返回已落结果（duplicate），先于一切 base 校验——receipt 集非单槽，跨 session 窗口安全** → record `owner:'agent'` 且 `state:'draft'|'active'` 校验 → **pending 互斥（S1-4）：active 且 `pendingRevision` 未决 → `pending_pending_conflict`** → CAS 双校验（revision + digest）→ `validateStructure` → revision = `hash(skillId, requestedBy)`，`writeRevisionBundle` → **draft：CAS 推进 currentRevision/contentDigest/catalogSummary + receipt 入 pending；active：CAS 记 `pendingRevision{revisionId, contentDigest, catalogSummary, createdByOpId}` + receipt 入 pending，currentRevision/record 级 catalogSummary 不动**（T49/T60）→ invalidate → readback。
-- `promoteDraft(ref, expectedRevision)` — 治理面专用：`draft` → `checkNameConflict` 重查 → CAS `active + promotedAt` → invalidate。
-- `activatePending(ref, expectedRevision)` — 治理面专用：`active && pendingRevision` → **单 record CAS 四字段原子切换：`currentRevision ← pending.revisionId`、`contentDigest ← pending.contentDigest`、`catalogSummary ← pending.catalogSummary`、清 `pendingRevision`**（S1-4/T60）→ invalidate。
-- `reject(ref, expectedRevision)` — 治理面专用：draft → `rejected`；active+pending → 清 pending（该 revision 计 orphan）。
-- `reopen(ref, expectedRevision)` — 治理面专用：`rejected → draft`（S1-8，T48）。
-- `transitionManagedSkill(ref, from: 'active'|'stale'|'archived', to: 'active'|'stale'|'archived', expectedRevision): Promise<TransitionOutcome>` — 治理/curator 迁移唯一写通道（P4 `runPass` 经此；方案 §3"一切写经 transitionManagedSkill"的落点，RC5.5.2 补规格）：仅 active 谱系；`pinned` 记录 Service 层一律拒绝迁移（no-op + 计入报告——用户门不可绕过，P4 `pinned-user-gate-unbypassable`）；单 record CAS（`from` 或 revision 失配 → `stale_base_revision`）；时间锚点随迁移同笔落账（`stateChangedAt=now`；入 stale 写 `staleAt`、复活清 `staleAt`、入 archived 写 `archivedAt`）；bundle 原位不动；成功后 `invalidate()`。draft/rejected 的流转走 promoteDraft/reject/reopen，不经本方法。
-- `checkNameConflict(authoring: AuthoringContext): Promise<NameConflict | undefined>` — (1) `<projectRoot>/.agents/skills/<name>[.md]` 直存；(2) `ctx.skills.list({ cwd, scope: authoring.scope })` winning 同名且 provider ≠ managed（S2-1）。
-- `enforceQuotas(projectKey, pendingBytes): void` — 四配额 fail-loud（`budget_exceeded` 附库存）。
-- `reconcileStartup(): Promise<ReconcileReport>` — 只记账：orphan revision 计数；**无完成标记的 revision 目录 → `incompleteRevisions` 计数（重放补全或 orphan 化，不删除）**；pointer/pendingRevision 指缺失 revision → `invalid_structure` 报告；占位无 record → 释放。
-- 验收（核心组）：`create-draft-lands-invisible`、`create-conflict-rejects`、`create-same-managed-name-suggests-patch-or-reopen`、`create-same-op-reservation-and-record-retry`（T64）、`create-threat-blocked-rejects`、`create-caution-passes-with-warning`、`patch-draft-advances-current`、`patch-active-stays-pending`（T49）、`patch-active-pending-conflict-rejects`（S1-4）、`skill-op-retry-duplicate-before-stale`（T57）、`skill-receipt-survives-later-same-skill-op`（T65）、`activate-pending-four-field-cas`（T60）、`pending-catalog-switches-only-on-approve`（T60）、`reject-pending-clears-and-counts-orphan`、`reject-draft-then-reopen`（T48）、`rejected-never-in-provider`（T48）、`patch-cas-mismatch-rejects`、`patch-external-edit-detected`、`patch-non-agent-owned-rejects`、`promote-pure-sidecar-cas`、`promote-conflict-recheck`、`promote-makes-visible-after-invalidate`、`quota-revisions-fail-loud`、`quota-bytes-fail-loud`、`reconcile-orphan-counted-not-deleted`、`reconcile-incomplete-revision-counted`、`reconcile-releases-orphan-reservation`、`concurrent-authors-cas-one-wins`、`op-derived-revision-path-exclusive`（T55）、`crash-between-bundle-and-pointer-reconciles`、`transition-stale-archive-revive-single-record`、`transition-pinned-service-level-noop`、`transition-from-mismatch-cas-rejects`。
+#### `validateManagedConfig(config): ResolvedManagedConfig`
+- 拓扑：P2-D01。
+- 职责：校验 provider rank、文件/总字节/路径/scan 开关、`maxRevisionsPerSkill/maxManagedBytesPerSkill/maxManagedBytesPerProject/maxOrphanBytesPerProject/maxUncommittedRevisionsPerProject` 五配额；`maxFileBytes <= MAX_SCAN_CHARS`；`receiptWindowSize` 与 revision 数量上限为正 safe integer。每个可能进入 definition 的文本文件都受 maxFileBytes，不能只限制 `SKILL.md`。`maxRevisionsPerSkill` 同时给永久 revision lineage 数量上界；`maxUncommittedRevisionsPerProject` 限制没有成功 record lineage 的 incomplete+orphan revision 目录数量，包括零字节目录。达上界后拒绝新 mutation，不淘汰 provenance，也不以字节配额掩盖数量耗尽。
+- 验收：`skill-file-limit-above-scan-cap-fails-load`（T81）、`receipt-window-required-positive`、`revision-count-caps-required-positive-safe-integers`、`all-model-visible-files-share-limit`、`exact-valid-config-passes`。
 
-#### `skill_manage` 工具插件（named export；authoring preset 挂载）
-- actions：`create-draft` | `patch-draft`；`exec` 取 cwd/scope 组 `AuthoringContext`，Service 内解析 ref（S1-1）；错误码透传（含 `pending_pending_conflict`）；结果 `{ skillId, state, revision, digest }`（active patch 返回 `state:'active', pending:true` 语义字段）；**无 promote/activate/reject/reopen**。
-- 经 `inject:['skillManaged']` 消费 host 层 Service（E0-9 形态）。
-- 验收：`tool-thin-delegates`、`tool-error-codes-surface`、`tool-pending-conflict-surfaces`、`tool-absent-from-default-preset`、`tool-has-no-governance-action`。
+#### `resolveProjectKey(cwd,ctx): Promise<ProjectKey>`
+- 拓扑：P2-D02。
+- 职责：nearest `.git`，否则 cwd → fs.resolve whole targetKey hash；local backend only；诊断 identity source。
+- 验收：`project-key-git-ancestor`、`project-key-alias-same-key`、`project-key-remote-fail-loud`、`project-key-non-git-cwd-diagnostic`。
 
-## 4. Config（schemastery）
+#### `deriveSkillId(projectKey,normalizedName)` / `deriveRevisionId(skillId,opId)`
+- 拓扑：P2-D03；name 必须先经 D02 normalize。
+- 职责：domain-separated deterministic ids；revision 目录由 op 决定，并发 op 不共路径。
+- 验收：`skill-id-project-isolated`、`revision-id-op-derived`、`revision-path-op-derived-exclusive`。
 
-`managedProviderRank`（默认 700，JSDoc"仅同层纵深"）、`maxFiles`/`maxTotalBytes`/`maxFileBytes`、`scanAgentCreatedSkills`（默认 true）、`managedRootName`（默认 `.dsh/self-evolution/skills`——revisions 根；RC5.5.2 更名自 `stagingRootName`，staging 概念已消亡）、`writableRoot`、配额四项 `maxRevisionsPerSkill`/`maxManagedBytesPerSkill`/`maxManagedBytesPerProject`/`maxOrphanBytesPerProject`。
+#### `canonicalManagedToolArguments(args): string` / `deriveDirectToolOpId(sessionId,callId,canonicalArguments): OpId`
+- 拓扑：P2-D03；derive 只接同节点先完成并测试的 canonical 字符串。
+- 职责：canonicalizer 对已解析 discriminated tool args recursively key-sort、数组保序、拒绝 undefined/unknown action fields；derive hash `skill-managed/direct-tool/v1` + durable session id + branded call id + canonical arguments；模型 schema 不含该 id。相同 durable call 重放同 id，不同 session/call 不碰撞。
+- 验收：`canonical-argument-key-order-stable`、`canonical-argument-arrays-preserve-order`、`canonical-argument-unknown-field-rejected-at-parser`、`tool-op-id-derived-from-session-and-call`（T69）、`tool-op-id-not-model-supplied`、`same-tool-call-same-id`、`same-callid-different-session-distinct`。
 
-## 5. 验收门（Phase 出口）
+#### `validateStructure(bundle,config): StructuralReport` / `bundleDigest(files): string`
+- 拓扑：P2-D04。
+- 职责：relative paths、无 `..`/absolute/symlink/binary、唯一 `SKILL.md`、file count/bytes；每个模型可见 text file 整文件 scan，blocked 拒绝、caution 记录；frontmatter 的所有模型可见字段包含在受 cap 的原文件；digest 排序文件名并排除 completion marker。
+- 验收：`structure-path-escape`、`structure-skill-md-required`、`structure-file-count-cap`、`structure-total-bytes-cap`、`structure-binary-rejected`、`structure-severity-caution-passes`、`structure-severity-blocked-rejects`、`every-model-visible-skill-field-is-within-scanned-file`（T81）、`bundle-digest-order-stable`。
 
-- 附件测试全绿 + 100% 覆盖（状态机全迁移×pending 决策表；provider 可见谱系矩阵 active|stale；配额边界；**T62/T64/T65 三组红测试先于 mutation path 落地**）；
-- REAL boot：Service 唯一 opener（双挂载即 `already-open` 暴露，T44）+ 挂载层枚举（T36 三向）+ create→draft→治理 approve→可见→`/name`→active patch pending（catalog 不变）→治理 activate（四字段原子切换，新 revision+summary 生效）全链 + create/patch 同 op crash-retry 幂等链；
-- HMR disposal（Service + provider + 工具）；snapshot（工具结果/错误码）；E0-9/E0-12 结案回填；
-- README（Model Experience：storage-only catalog 语义 + 可见性分离 + stale 可发现；Known Limitations：无 delete、无物理 GC、usage 活期观测、user 域暂缓、窄删除推迟）+ Agent Note（唯一所有权、ManagedSkillRef 定位传递、op-derived revision 幂等、trust transition、pendingRevision 与 Hermes write-approval 同构）。
+#### `placeMutationReceipt(appliedOps,receipt,origin,windowSize): SkillAppliedOps`
+- 拓扑：P2-D05。
+- 职责：review origin 加入 pending；direct-tool origin 直接加入 terminal ring 并有界；已知 op 返回原 receipt；同 op 在另一区域出现时按 origin 校验，direct-tool 不得迁移一个 review pending。
+- 验收：`review-receipt-enters-pending`、`foreground-skill-receipt-enters-terminal-ring`（T69）、`foreground-receipts-remain-bounded`、`direct-cannot-terminalize-review-pending`、`known-op-placement-idempotent`。
+
+#### `splitFinalizedSkillReceipts(appliedOps,finalizedOpIds,windowSize): SkillAppliedOps`
+- 拓扑：P2-D05。
+- 职责：只供 P3 ledger 已 finalized 后的 review receipt cleanup；pending→ring、ring no-op、两无 no-op（已 finalized receipt 可已从 ring 淘汰）；空 id/无效 ref 仍 invalid_structure。未 finalized review pending 永不淘汰。
+- 验收：`skill-finalized-ack-moves-pending`、`skill-finalized-ack-retry-idempotent`、`skill-finalized-ack-after-eviction-noop`（T85）、`skill-unfinalized-pending-never-evicted`、`skill-terminal-ring-bounded`、`skill-finalized-ack-empty-id-fails`。
+
+## 5. Store 与 Provider
+
+#### `ManagedSkillStore` record/revision primitives
+- 拓扑：P2-D06。
+- `getRecord/casPutRecord(ref,expectedRevision)`：只接 ManagedSkillRef。
+- `writeRevisionBundle(ref,revisionId,files)`：全量重写，completion marker 最后 createIfAbsent；marker 已在且 digest 同则续跑，异则 invalid_structure；无 marker 的 partial bundle 重放补全。
+- 验收：`record-first-record`、`record-cas-conflict`、`partial-bundle-crash-retry-completes`、`foreign-revision-content-fails-loud`。
+
+#### `ManagedSkillStore.ensureNameIndex(projectKey)`
+- 拓扑：P2-D07；调用 D06 storage primitives。
+- 职责：get→missing put empty→update；并发 first initialization 收敛为一个合法 index，不以覆盖 put 充当 CAS。
+- 验收：`name-index-first-record`、`concurrent-name-index-initialization-converges`。
+
+#### `ManagedSkillStore` reservation/provenance/receipt/reconcile methods
+- 拓扑：P2-D08；调用 D05–D07。
+- `reserveName(projectKey,name,skillId,opId)`：先 D07 ensure；不存在占位，同 op resume，异 op name_conflict。
+- `resolveMutationProvenance(opId)`：从 record 中的 immutable revision lineage 查找 review op 指针或 direct-tool session/call；允许重建的 op index 只是加速投影，缺失时扫 lineage 补回，冲突 fail-loud。
+- `findAppliedMutation(opId)`：在 receipt duplicate 检查后查 immutable lineage；terminal receipt 已淘汰但 lineage 已有该 op 时仍返回 duplicate，必须早于 base/state/pending 检查。
+- `acknowledgeFinalizedOps(groups)`：调用 D05 finalized split；输入仅 ledger 已 finalized 的 review applied/duplicate opStates；P2 不导入 P3，前置由 host 调用顺序保证。
+- `rebuild/reconcile`：释放 reservation-without-record；记录 incomplete/orphan 的 path、byte count 与 count，不物理删除；同一目录重扫不得重复计数。
+- 验收：`reserve-first-project-initialized`、`reserve-same-op-resumes`、`reserve-different-op-conflicts`、`skill-receipt-survives-later-same-skill-op`、`skill-finalized-ack-scoped-and-idempotent`、`revision-lineage-written-with-successful-record-cas`、`direct-tool-provenance-survives-receipt-eviction`、`evicted-direct-receipt-still-duplicates-via-lineage`、`provenance-index-rebuilds-from-lineage`、`reconcile-releases-orphan-reservation`、`reconcile-identifies-zero-byte-uncommitted-revision`、`reconcile-rescan-does-not-double-count-orphan`。
+
+#### `class ManagedSkillProvider implements SkillProvider`
+- 拓扑：P2-D09。
+- `list(options)`：project resolve；只读 storage sidecar；active|stale；candidate locator 钉 project/ref/revision/digest；单 record 损坏 → skip + complete:false，整体失败 throw。
+- `get(candidate,options)`：project/ref 校验 → exact revision → whole bundle digest → 每个可见文件 read-boundary re-scan → definition body；summary/invocation 取 candidate 冻结字段，避免并发 approve 混代。
+- 验收：`provider-contract-typechecks`、`provider-list-visible-lineage`、`provider-list-reads-sidecar-not-files`、`stale-remains-discoverable-and-loadable`、`get-uses-candidate-frozen-summary`、`external-edit-active-skill-refused-on-get`、`load-boundary-threat-rescan-all-files`、`provider-project-isolation`、`abort-signal-stops-list-and-get`、`provider-hmr-disposal`。
+
+## 6. Authoring、Service 与工具
+
+#### `checkNameConflict(authoring,name)` / `enforceQuotas(projectKey,pendingInventory)`
+- 拓扑：P2-D10。
+- 职责：人工直存与 registry winning candidate 双检查；managed 同名指向 patch/reopen；按 current records + completed/incomplete/orphan revisions + pending batch 聚合上述五项库存配额，fail-loud 返回 bytes/count/path 分类 inventory。尚无内容或 completion marker 的 revision 也占一个 uncommitted count；成功进入 immutable lineage 后从 uncommitted 转入 per-skill revision count，不得两边重复计数。同 op 重放已存在的 partial revision 时，count delta 为零，bytes 以“用完整目标 bundle 替换现有 partial bytes”的 projected inventory 计算；因此达到 count 上限仍允许该 op 原地完成，但不得借 resume 写另一个 revision 或突破 bytes 上限。
+- 验收：`conflict-human-direct-source`、`conflict-winning-nonmanaged-provider`、`managed-same-name-suggests-patch`、`quota-exact-boundary`、`quota-error-inventory`、`revision-cap-bounds-immutable-lineage`、`orphan-bytes-participate-in-quota`、`zero-byte-orphan-participates-in-count-quota`、`completed-lineage-not-double-counted-as-uncommitted`、`pending-batch-aggregates-uncommitted-count`、`same-op-partial-resume-at-count-cap-is-allowed`、`partial-resume-projects-full-target-bytes`、`different-op-at-count-cap-is-rejected`。
+
+#### `AuthoringCore.preflightMutations(inputs): Promise<ManagedPreflight>`
+- 拓扑：P2-D11；调用 D02–D10；create/patch 只复用这些更早的 validation/store helpers，不复制规则。
+- 职责：**review admission 专用的只读 batch 预检**；在一组一致 storage/provider views 上执行 duplicate-before-base、project/owner/state/pending、name conflict、plan 内重复 name/ref、structure/full-file scan 与聚合 quota 检查。不 reserve name、不写 bundle/record/receipt/lineage。预检后的竞态由 create/patch 的 reservation/CAS 捕获并返回 stale 给 P3 supersede；preflight 不假装跨 storage 和 filesystem 事务。
+- 验收：`preflight-matches-create-and-patch-validation`、`preflight-never-reserves-name-or-writes`、`preflight-detects-existing-pending-conflict`、`preflight-detects-intra-plan-name-and-ref-conflict`、`preflight-aggregates-whole-plan-quota`、`preflight-race-still-fails-mutation-cas`。
+
+#### `AuthoringCore.createDraft(input,origin)`
+- 拓扑：P2-D12；调用 D02–D11。
+- 职责：resolve project/name/ref → existing receipt/lineage duplicate → human conflict → op-aware reservation → structure/quota → op-derived revision bundle → record CAS 同笔写 state+receipt+immutable lineage。review receipt pending；direct-tool receipt terminal ring。模型不能选择 origin。
+- 验收：`create-draft-lands-invisible`、`create-conflict-rejects`、`create-same-op-reservation-and-record-retry`、`create-threat-blocked-rejects`、`create-caution-passes`、`create-review-receipt-pending`、`create-direct-receipt-terminal`、`concurrent-authors-cas-one-wins`。
+
+#### `AuthoringCore.patchDraft(input,origin)`
+- 拓扑：P2-D13；调用 D02–D11，不调用 createDraft。
+- 职责：record receipt/lineage duplicate-before-base → owner/state/pending gate → exact revision+digest CAS → structure/quota → bundle → draft current pointer 或 active pending 四字段 + receipt + immutable lineage 同笔 CAS。active current catalog 不变直到 approve。
+- 验收：`patch-draft-advances-current`、`patch-active-stays-pending`、`patch-active-pending-conflict-rejects`、`skill-op-retry-duplicate-before-stale`、`skill-receipt-survives-later-same-skill-op`、`pending-catalog-switches-only-on-approve`、`patch-review-vs-direct-receipt-mode`。
+
+#### `promoteDraft/activatePending/reject/reopen/transitionManagedSkill/reconcileStartup`
+- 拓扑：P2-D14；调用 D04–D13。
+- 职责：治理 CAS 全重验；approve pending 原子切 pointer/digest/summary/clear；reject draft→rejected 或 clear pending；reopen rejected→draft。`transitionManagedSkill` 检查 actor：curator 仅 active↔stale、stale→archived，pinned no-op；governance 仅 archived→active，允许用户 restore；时间锚点同 CAS。
+- 验收：`promote-conflict-recheck`、`activate-pending-four-field-cas`、`reject-draft-then-reopen`、`rejected-never-visible`、`curator-cannot-restore-archived`（T82）、`archived-skill-requires-governance-restore`（T82）、`restore-makes-skill-visible`、`transition-pinned-curator-noop`、`transition-from-mismatch-cas-rejects`、`reconcile-incomplete-and-orphan-counted`。
+
+#### `class ManagedSkillService extends Service`
+- 拓扑：P2-D15。
+- 职责：唯一 `dsh.skill-managed` opener，持有 Store/Provider/Authoring；validate Config 后注册 provider；公开 preflight/create/patch/governance/transition/finalized-ack/list/provenance methods，不暴露 domain handle。create/patch 成功 CAS 后发 typed `revision-committed`；promote/activate 成功切 current 后发 `revision-activated`。事件 payload 来自 committed result，不预发；observer 失败不回滚资源 CAS。
+- 验收：`managed-domain-opened-exactly-once`、`service-is-only-write-owner`、`provider-and-authoring-share-store`、`revision-event-only-after-successful-cas`、`activation-event-identifies-exact-current-revision`、`observer-failure-does-not-rollback-skill`、`service-hmr-closes-domain-and-provider`。
+
+#### `skill_manage` named tool plugin
+- 拓扑：P2-D16。
+- 职责：actions 仅 create-draft|patch-draft；要求 `exec.agent`，从 `agent.session.header.id + exec.callId + parsed args` 调 D03 canonicalizer/derive op id；传 `origin:{kind:'direct-tool',opId,sessionId,callId}`；无 requestedBy schema，无 approve/reject/restore。工具 inject host Service，默认 preset 不挂。
+- 验收：`tool-thin-delegates`、`tool-op-id-derived-from-session-and-call`（T69）、`tool-without-agent-fails-loud`、`same-tool-call-retry-does-not-create-second-revision`、`tool-result-surfaces-error-codes`、`tool-absent-from-default-preset`、`tool-has-no-governance-action`、`p2-does-not-import-session-review`。
+
+## 7. Config 与 Phase 出口
+
+Config 至少包含 `managedProviderRank`、`maxFiles/maxTotalBytes/maxFileBytes`、`scanAgentCreatedSkills`、`managedRootName`、`writableRoot`、`maxRevisionsPerSkill/maxManagedBytesPerSkill/maxManagedBytesPerProject/maxOrphanBytesPerProject/maxUncommittedRevisionsPerProject` 与 required `receiptWindowSize`。默认全部在 schema/README 声明；不得依靠 implementation-only constant。因为首版不物理删除 incomplete/orphan，数量配额触发时诊断必须列出 operator 可检查的 exact paths；服务不得静默放宽上限或自动删除。
+
+Phase 出口：T69/T81 与原 P2 矩阵全绿；per-file 100%；REAL boot 覆盖 create→draft→approve→visible、active patch→pending→activate、direct/review receipt、same-call crash retry、人工同名层级与 restore；snapshot 更新工具结果/错误码；README/Agent Note 说明 storage-only catalog、read revalidation、direct/review receipt、无物理 GC、non-Git cwd 与 archived restore。

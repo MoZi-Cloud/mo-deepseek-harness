@@ -1,12 +1,12 @@
-# RC5.5 附件 P0 — Evidence Lock（行为事实钉死，68 项 = 66 活跃 + 2 历史回归）
+# RC5.5.3 附件 P0 — Evidence Lock（行为事实钉死，68 项 = 66 活跃 + 2 历史回归）
 
 > 上位：`RC5.5-函数级规格总纲.md`。P0 = **zero behavior change**（允许测试与未来包骨架，不注册生产行为、不改 shipped composition）。
 >
 > 测试落位：`packages/review/session-review/tests/evidence-lock/*.spec.ts`（本阶段创建该包骨架）。
 >
-> 相对 RC5.3-P0：T36 期望值改写（S2-6）；T41 改 live 事件（S1-6）；新增 T42–T53（第六轮处置 §4）。相对 RC5.4-P0：T33/T49/T52 期望值随第七轮修订；新增 T54–T61（第七轮处置 §4）。相对 RC5.5-P0：新增 T62–T68（第八轮处置 §3：opId 派生、create 幂等、skill receipt 对称、applied-only ack、finalization 幂等、disposition 门控 advance）。RC5.5.2：计数更正——矩阵 68 项中 T09/T11 为历史回归（活跃 66），验收门措辞同步。
+> 相对 RC5.3-P0：T36 期望值改写（S2-6）；T41 改 live 事件（S1-6）；新增 T42–T53（第六轮处置 §4）。相对 RC5.4-P0：T33/T49/T52 期望值随第七轮修订；新增 T54–T61（第七轮处置 §4）。相对 RC5.5-P0：新增 T62–T68（第八轮处置 §3：opId 派生、create 幂等、skill receipt 对称、applied-only ack、finalization 幂等、disposition 门控 advance）。RC5.5.2 更正计数。RC5.5.3 保留这 68 项 test-tree 事实，但自审发现 T67 的 ack-before-finalized 在 bounded ring 下存在恢复窗口，T68 把确定性 admission 拒绝归 retry 会无意义进 manual；生产规格分别以 T85/T86 取代这两个实现顺序/分类，不修改或晋升 P0 reference。T69–T86 是 P1–P5 生产验收，不能伪装成 P0 已完成。
 >
-> 日期：2026-08-29（RC5.5.1 增补 2026-08-30；RC5.5.2 修补 2026-08-30）
+> 日期：2026-08-29（RC5.5.3 说明增补 2026-09-01）
 
 ## 1. 测试矩阵（T01–T41 承前修订，T42–T53 第六轮新增，T54–T61 第七轮新增，T62–T68 第八轮新增）
 
@@ -101,3 +101,9 @@
 ## 4. 验收门
 
 矩阵 68 项全绿（66 活跃 + T09/T11 两项历史回归）；E0 全结案回填；`git diff` 仅新增测试与包骨架（zero behavior change）；Agent Note 记录结论与被修正假设（含 T36 期望值改写、T15/T41 durable-vs-live 对照、T54–T61 第七轮六项协议缺口、T62–T68 第八轮 receipt/finalization/disposition 缺口）。
+
+## 5. RC5.5.3 使用边界
+
+Evidence Lock 的 `review-protocol.ts` / `managed-protocol.ts` 仍是 test-tree reference，生产代码不得 import、复制后改名或把其遗漏当作最终协议。RC5.5.3 已知需要超出 reference 的 finalization after-finalized repair、retry due gate、direct receipt、history scan 与 provenance rebuild，分别由附件 P1–P5 的生产测试证明。
+
+T85/T86 不回写 P0 已绿测试：T67/T68 保留为第八轮 reference 的可重现记录，新生产路径必须先红 T85/T86，并不得同时声称实现了相反的旧顺序。
