@@ -24,7 +24,7 @@ Curator checkpoint 将保留 outcome ordinal、immutable outcome digest、signal
 
 Physical orphan reclamation 将继续留在核心 managed-skill authoring Phase 之外。未来 operator protocol 只能在 project mutation maintenance lock 下，经 durable preparation、完整 authority-reference 重验、quarantine 和 crash-safe settlement 后回收 branded revision identity。Raw-path deletion 与自动 garbage collection 不受支持。
 
-完整的函数顺序与验收矩阵记录于 [RC5.5.4 处置](../../../../docs/mozi-fork/RC5.5.4-第十轮评审核验与处置.md)。已实现的 [P0 Evidence Lock note](../../implemented/feature/2026-08-31-session-review-p0-skeleton.zh.md) 仍是已发布 test-only reference suite 的 owner；本提案不会把这些 reference 晋升为生产实现。
+[RC5.5.4 处置](../../../../docs/mozi-fork/RC5.5.4-第十轮评审核验与处置.md)记录这四项机制的函数顺序。Named reviewer selection 以及 managed-skill ownership、promotion、repair 与 consolidation 由后续的 [有界自治技能进化提案](2026-09-02-bounded-autonomous-skill-evolution.zh.md)拥有。已实现的 [P0 Evidence Lock note](../../implemented/feature/2026-08-31-session-review-p0-skeleton.zh.md) 仍是已发布 test-only reference suite 的 owner；本提案不会把这些 reference 晋升为生产实现。
 
 ## Protocol ownership
 

@@ -24,7 +24,7 @@ Curator checkpoints will retain an outcome ordinal, immutable outcome digest, si
 
 Physical orphan reclamation will remain outside the core managed-skill authoring phase. A later operator protocol may reclaim only a branded revision identity under a project mutation maintenance lock after durable preparation, complete authority-reference revalidation, quarantine, and crash-safe settlement. Raw-path deletion and automatic garbage collection are not supported.
 
-The complete function order and acceptance matrix are recorded in the [RC5.5.4 disposition](../../../../docs/mozi-fork/RC5.5.4-第十轮评审核验与处置.md). The implemented [P0 Evidence Lock note](../../implemented/feature/2026-08-31-session-review-p0-skeleton.md) remains the owner of its shipped test-only reference suite; this proposal does not promote those references into production.
+The [RC5.5.4 disposition](../../../../docs/mozi-fork/RC5.5.4-第十轮评审核验与处置.md) records the function order for these four mechanisms. Named reviewer selection and managed-skill ownership, promotion, repair, and consolidation are owned by the later [bounded autonomous skill evolution proposal](2026-09-02-bounded-autonomous-skill-evolution.md). The implemented [P0 Evidence Lock note](../../implemented/feature/2026-08-31-session-review-p0-skeleton.md) remains the owner of its shipped test-only reference suite; this proposal does not promote those references into production.
 
 ## Protocol ownership
 

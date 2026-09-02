@@ -1,8 +1,10 @@
-# RC5.5.4 附件 P4 — Skill curator、usage coverage 与可恢复 lifecycle（函数级规格）
+# RC5.5.5 附件 P4 — Skill lifecycle curator 与 class-level consolidation（函数级规格）
 
 > 上位：`RC5.5-函数级规格总纲.md`；前置：P2、P3；包：`packages/skill/skill-curator`；日期：2026-09-02。
 >
 > P4 不把“技能定义加载成功”写成“任务成功”。它分存 model load、用户显式调用、patch 与 Host 结构可验的 reuse outcome；正信号即使 coverage 不完整也可使 stale 回 active，但“窗口内零活动”只能在完整覆盖时触发 stale/archive。archived 不可见，只能由 P3 人类治理调 P2 governance restore。
+>
+> P4a保留RC5.5.4的deterministic usage/lifecycle。P4b是独立的bounded semantic consolidation pipeline：它复用P3 named profile/attestation和P2 exact mutation/promotion/absorption API，但拥有project-level `ConsolidationAttempt`；不把LLM判断混入D07 lifecycle state machine。
 >
 > 当前 `SkillInvocationSource` 只持久化 name/form，不能在重启后区分同名人工 provider 与 managed provider；model tool 的 execution-local value 虽含 provider，却从 durable tool/result 删除。现有 `output.presentationMeta` 会与 top-level tool/result 同条持久化，并明确不为 nested composite call 生成；后者的结果不直接进入模型请求，不能计作 model load。P4 的第一个叶节点因此为 user source 和 top-level result meta 补 winning provider；没有这两项前不实现 usage 归属。
 
@@ -19,6 +21,12 @@ src/store.ts          # durable usage/coverage store
 src/observer.ts       # live + durable event observation
 src/curator.ts        # maintenance pass
 src/metrics.ts        # operational aggregation
+src/consolidation-types.ts    # cluster/plan/attempt/config
+src/consolidation-cluster.ts  # bounded deterministic candidates
+src/consolidation-plan.ts     # schema/canonical identity/preflight inputs
+src/consolidation-store.ts    # durable attempt/claim/recovery
+src/consolidation-planner.ts  # named profile + attested structured output
+src/consolidation-runtime.ts  # destination-first forward saga
 src/index.ts          # host-level assembly/effects
 ../skill/src/index.ts       # SkillInvocationSource.provider
 ../tool-skill/src/index.ts  # durable skill-load presentationMeta
@@ -50,6 +58,16 @@ CuratorConfig = {staleAfterDays,archiveAfterDays,zeroUseGraceDays,
                  signalReceiptWindowSize,outcomePageSize,maxSignalsPerOutcomeBatch,sessionEventPageSize}
 SkillInvocationSource = {kind:'skill-invocation',name,provider,form:'instructions'}
 SkillLoadPresentationMeta = {kind:'skill-load',name,provider,renderedContentDigest}
+ConsolidationCluster = {projectKey,clusterId,cursor?,complete,items:[{ref,revision,digest,
+                        name,catalogSummary,triggerTokens,owner,pinned,autonomousManaged}]}
+ConsolidationPlan = {destination:create|patch,absorbedSources:[{ref,revision,digest}],reason}
+ConsolidationAttempt = {attemptId,projectKey,clusterId,profileId,scopeDigest,attestation,
+                        authorizationRef:rollout{artifactDigest}|evaluation{evalPermitId},
+                        immutablePlan,planDigest,destinationState,sourceStates,
+                        promotionEvidence?:ConsolidationPromotionEvidence,
+                        status,terminal?,finalized?}
+EvaluationConsolidationPermit = {evalPermitId,caseId,repeatIndex,scopeDigest,clusterId,planDigest}
+EvaluationConsolidationAuthority = process-local opaque capability bound to one disposable eval root
 ```
 
 P4 usage store 是 lifecycle 输入权威；P2 managed record 是 skill state/anchor 权威；P3 finalized outcome 是结构 outcome 权威。`model-load` 只表示 exact managed provider 返回了定义，可作可见 stale 技能的活动信号，但不增加 `verifiedReuses`、不证明任务成功，P5 不得用 modelLoads 替代 quality score。
@@ -70,8 +88,16 @@ P4 usage store 是 lifecycle 输入权威；P2 managed record 是 skill state/an
 | P4-D10 | `SkillCurator.runPass` | D07–D08、P2 transition/list APIs |
 | P4-D11 | `aggregateOutcomes` | D02、P3 ledger/P4 store read APIs |
 | P4-D12 | package assembly | D08–D11 |
+| P4-D13 | consolidation types/schema + `validateConsolidationConfig` | P2/P3 public types、D02 |
+| P4-D14 | `buildBoundedSkillClusters` | D13、P2 learning inventory |
+| P4-D15 | plan schema + `canonicalConsolidationPlanDigest/deriveConsolidationIds` | D13–D14、crypto |
+| P4-D16 | `preflightConsolidationAttempt` | D14–D15、P2 `preflightConsolidation` |
+| P4-D17 | `ConsolidationAttemptStore` | D13、D15、storage domain |
+| P4-D18 | `startConsolidationPlanner/attestConsolidationPlanner` | D13–D15、P3 named profile/execution APIs |
+| P4-D19 | `SkillConsolidator.runPass/resumeAttempt/createEvaluationConsolidationAdapter` | D16–D18、P2 mutation/promotion/absorption APIs |
+| P4-D20 | consolidation assembly + metrics extension | D13–D19、D12 host assembly |
 
-D01 先于 user-invocation classifier，D06 先于 checkpoint Store/observer，D07 先于 curator，D08 先于 observer；observer 不得自行迁移 skill，curator 不得从“没有 record”或 unresolved fault 推导零使用。
+D01先于user-invocation classifier，D06先于checkpoint Store/observer，D07先于curator，D08先于observer；observer不得自行迁移skill，curator不得从“没有record”或unresolved fault推导零使用。P4b严格位于P4a与P3 Phase出口之后：D14 cluster先于D18 planner，D15 identity先于D17 Store，D16 read-only preflight先于D19 mutation caller；任何source archive都晚于destination exact activation。
 
 ## 4. 纯函数与 coverage
 
@@ -97,8 +123,8 @@ D01 先于 user-invocation classifier，D06 先于 checkpoint Store/observer，D
 
 #### `deriveVerifiedReuse(load,finalizedOutcome): UsageSignal | undefined`
 - 拓扑：P4-D05；只读 P3 finalized Host outcomes。
-- 职责：按 finalized outcome 的 durable session/turn/event coordinates 回读 exact top-level skill tool/result 与 validated meta；只在 exact root session 中 managed load 之后、同一 completed turn 内有可定位 tool-success 或 failure-recovered，且该 turn 无 later unresolved 时产生结构 `verified-reuse`。不依赖可能已淘汰的 usage receipt 或 aggregate 中的最后时间；assistant 自述、turn completed 单独、transient/unknown 不产生。该信号仍是 Host 可观察 reuse outcome，不声称技能对语义成功具有因果。
-- 验收：`load-then-tool-success-derives-structural-reuse`、`failure-recovered-derives-reuse`、`later-unresolved-blocks-verified-reuse`、`assistant-success-claim-never-derives-reuse`、`cross-session-or-turn-outcome-never-correlates`。
+- 职责：按finalized outcome的durable session/turn/event coordinates回读exact top-level skill tool/result与validated meta；只在exact root session中managed load之后、同一completed turn内有可定位tool-success或`retry-recovered`，且该turn无later unresolved时产生结构`verified-reuse`。RepairEpisode单独不算reuse，只有其working call同时满足tool-success条件时可计结构活动；不依赖可能淘汰的usage receipt。Assistant自述、turn completed单独、transient/unknown不产生。该信号不声称skill对语义成功有因果。
+- 验收：`load-then-tool-success-derives-structural-reuse`、`retry-recovered-derives-reuse`、`repair-episode-alone-is-not-reuse`、`later-unresolved-blocks-verified-reuse`、`assistant-success-claim-never-derives-reuse`、`cross-session-or-turn-outcome-never-correlates`。
 
 #### `canonicalOutcomeDigest(outcome)` / `compareSignalCoordinate(version,a,b)` / `deriveOutcomeSignalBatch(outcome,version,afterCoordinate,limit)`
 - 拓扑：P4-D06；调用 D05 对单个 load/outcome 配对，不做 I/O。
@@ -137,6 +163,50 @@ D01 先于 user-invocation classifier，D06 先于 checkpoint Store/observer，D
 - 职责：host 级唯一 Store/Observer/Curator；Service ready 且三类 startup reconciliation 完成后才 heartbeat；effects 先停止接收新 source、结算或明确 gap，再注销 listener/timer/queue；只有全部排空并持久化 checkpoints 后可把 epoch 写 closed，未能排空则保持 open 并 mark gap。
 - 验收：`host-assembly-single-observer`、`not-covered-before-ready`、`hmr-disposes-listeners-timers-and-queue`、`assembly-misconfiguration-fails-load`。
 
-## 6. Phase 出口
+## 6. P4b class-level consolidation
 
-T82/T90 与附件全部测试、per-file 100% coverage、P2+P3+P4 REAL boot 全绿；crash/queue/write/HMR 故障注入证明 batch resume 不重复、oversized 不 head-block、unresolved fault 延后 stale/archive且不阻止正信号；keyless snapshot 覆盖 source provider/result meta 重放、top-level load、PTC non-load、同名人工/managed 分离、explicit invocation、late/oversized/corrupt outcome、stale model load 恢复与 archive 后只有 governance restore 再可见；README/Agent Note 说明 load 非 quality、coverage/fault 的保守性、无物理清理与 non-Git cwd 限制；持久字段变化同 Phase 更新 keyless snapshot 与双 SDK expected outputs（若 SDK 投影对应字段）。
+#### `validateConsolidationConfig(config): ResolvedConsolidationConfig`
+- 拓扑：P4-D13；调用P4-D02基础duration/cap helper与P2/P3 public types。
+- 职责：校验enabled、interval、min cluster size、max cluster items/files/chars、page size、max concurrent attempts、retry/resume caps、allowed named review profiles与production required authorization capability=`skill-consolidation`。所有容量为正safe integer；`maxClusterItems`至少2。配置不允许inherit-current conservative profile，不在runPass内补默认。Eval-only adapter不通过Config伪造已签capability，而是另验P5创建的root-bound process authority。
+- 验收：`consolidation-config-exact-boundaries`、`cluster-cap-at-least-two`、`consolidation-profile-must-be-named`、`consolidation-capability-required`、`runtime-does-not-default-consolidation-config`。
+
+#### `buildBoundedSkillClusters(inventory,cursor,config): ConsolidationClusterPage`
+- 拓扑：P4-D14；调用D13 config与P2 verified learning inventory。
+- 职责：只纳入owner=agent、autonomousManaged、未pinned、active|stale的exact records；按normalized name、catalog summary/trigger token与已记录loaded/related refs生成deterministic候选边，连通分量按stable ref排序并分页。每个cluster受item/files/chars硬上限；超限返回continuation而非截断后声称complete。Usage count不参与overlap判断。首版不调用embedding/vector/LLM semantic search。
+- 验收：`cluster-order-and-cursor-stable`、`prefix-and-trigger-token-form-bounded-candidates`、`usage-zero-never-proves-overlap-or-pruning`、`protected-user-external-and-pinned-excluded`、`oversized-cluster-pages-without-completeness-claim`、`no-vector-or-llm-call-in-clustering`、`unrelated-token-class-remains-separate`。
+
+#### `ConsolidationPlanSchema` / `canonicalConsolidationPlanDigest(plan,version)` / `deriveConsolidationIds(projectKey,clusterId,attemptNo,planDigest)`
+- 拓扑：P4-D15；调用D13–D14和crypto，不做I/O。
+- 职责：planner输出恰好一个destination create/patch与零个或多个absorbed sources；destination patch和sources都复制cluster中的opaque exact ref/revision/digest，files为全量bundle。模型不提供owner、opId、attemptId、clock、permit、state或archive actor。Canonical plan固定destination在前、sources按ref排序，versioned digest派生attempt/resource op ids；stored attempt按原version重放。
+- 验收：`consolidation-plan-one-destination`、`source-exact-bases-required`、`source-must-belong-to-cluster`、`authority-fields-rejected`、`canonical-plan-and-opid-vectors-stable`、`source-order-canonical`、`unknown-plan-version-fails-loud`。
+
+#### `preflightConsolidationAttempt(cluster,plan,current,config): Promise<ConsolidationAdmission>`
+- 拓扑：P4-D16；调用D14–D15与P2 `preflightConsolidation`，零写入。
+- 职责：验证cluster/context digests、execution authorization capability、destination/source exact bases与plan hard caps，再委托P2执行owner/pin/structure/scan/conflict/quota检查。所有source exact bundles必须完整出现在attested planner input；任一确定性拒绝整attempt zero mutation。成功返回`structurallyAdmitted`与绑定cluster/context/plan/destination/source bases的canonical `preflightDigest`，不得命名为knowledgePreserved；D16本身不创建promotion evidence。
+- 验收：`whole-consolidation-preflight-before-write`、`all-source-bundles-were-in-attested-input`、`one-stale-source-preflight-zero-mutation`、`unapproved-scope-is-shadow-only`、`preflight-digest-binds-plan-destination-and-all-source-bases`、`admission-never-claims-semantic-preservation`（T93）。
+
+#### `class ConsolidationAttemptStore`
+- 拓扑：P4-D17；调用D13、D15与storage domain。
+- 职责：project级单opener；claim按project+cluster串行分配attemptNo并受`maxConcurrentConsolidations`限制。Attempt永不删除，profile/scope/actual attestation、不可变rollout artifact或evaluation permit引用、immutable plan/digest、destination/source exact bases、Host派生的promotion evidence、op states、waiting-approval、terminal/finalized单调持久化。Promotion evidence只能在immutable plan已写且D16 exact preflight成功后create-if-absent；同attempt内重放必须byte-equal，任一identity/digest不等fail-loud。Evaluation authority永不持久化；crash后只有P5重验fixture/permit并为同root新建process authority后才可resume eval attempt。Pending P2 receipts在attempt finalized前不cleanup；finalization先terminal→finalized→applied/duplicate receipt ack→release。Startup先恢复planned/committing/waiting-approval/finalized+occupied，再接新claim；derived op index可从attempt重建。
+- 验收：`consolidation-attempt-retained-and-monotonic`、`profile-and-attestation-before-plan`、`attempt-retains-rollout-or-eval-permit-reference-not-authority`、`promotion-evidence-requires-stored-plan-and-successful-preflight`（T93）、`promotion-evidence-create-if-absent-is-idempotent`、`planned-recovery-never-recalls-model`、`eval-restart-revalidates-permit-and-reissues-root-authority`（T93）、`waiting-approval-survives-restart`、`receipt-pending-until-attempt-finalized`、`crash-after-finalized-before-ack-recovers`、`op-index-rebuilds-from-attempt`、`project-concurrency-cap-rebuilt-on-startup`。
+
+#### `startConsolidationPlanner(cluster,profile,config)` / `attestConsolidationPlanner(run,scope)`
+- 拓扑：P4-D18；调用D13–D15与P3 named profile/execution/structured-output APIs。
+- 职责：production只使用获`skill-consolidation`授权的named profile；shadow可生成audit plan但不mutate。P5 eval-only adapter可以exact named scope + `EvaluationConsolidationAuthority`代替尚未签发的该capability，但不能代替profile resolution或actual attestation。Planner使用complete consolidation prompt、runtime-context suppression、普通tool空、scoped `structured_output`恰好一次；input仅为D14 bounded cluster的exact bundles和protection state。Actual attestation在immutable plan前持久化并核对；profile unavailable/mismatch不fallback，零mutation。Prompt要求优先patch existing umbrella、再support file、最后new class-level umbrella，但Host只把exact target和结构规则当authority。
+- 验收：`consolidator-uses-authorized-named-profile`、`planner-sees-one-bounded-cluster-not-full-library`、`ordinary-tools-unavailable`、`structured-output-exactly-once`、`actual-attestation-before-plan`、`profile-mismatch-zero-mutation`、`existing-umbrella-preference-scored-not-host-invented`。
+
+#### `SkillConsolidator.runPass(signal)` / `resumeConsolidationAttempt(attemptId)` / `createEvaluationConsolidationAdapter(authority)`
+- 拓扑：P4-D19；调用D16–D18与P2 create/patch/promotion/absorption/finalized-ack APIs。
+- 职责：D19先实现production `runPass/resumeConsolidationAttempt`，再实现调用同一runtime的eval adapter。Cluster→claim→attested plan→immutable plan→whole preflight后，Host从stored attempt和D16的exact result派生P2 `ConsolidationPromotionEvidence`并先持久化，再按固定forward saga执行：destination create/patch draft/pending；若human approve已使exact destination active则继续，若scope同时获`skill-auto-promotion`与`skill-consolidation`授权，则在每次promotion调用前重读D17 attempt，验证stored evidence与immutable plan、destination/source exact bases及preflight digest byte-equal，再把typed evidence传给P2唯一promotion policy。P2重验destination origin/current与自身policy/permit facts，不读取P4 Store。其他情况写waiting-approval并停止。Destination exact revision active后才逐source调用`absorbSkill`。每个source stale时记录skipped-stale并保持可见，其他source继续；不回滚已active destination。Crash按stored plan/op ids续跑。全部applied/duplicate/skipped-safe后finalize/ack/release。Archived source bundle/lineage不删除，governance可restore。`createEvaluationConsolidationAdapter`只由P5 disposable composition调用，它需要exact eval permit + current-root process authority，其他调用与production runtime相同；adapter dispose后authority失效。
+- 验收：`destination-commit-precedes-any-source-archive`（T93）、`destination-not-active-waits-with-all-sources-visible`（T93）、`authorized-agent-destination-uses-p2-promotion-policy`（T91/T93）、`consolidation-promotion-evidence-persists-before-destination-write`（T93）、`consolidation-attempt-revalidated-immediately-before-promotion`（T93）、`p2-remains-independent-of-p4-store`（T93）、`crash-after-evidence-before-destination-reuses-identical-evidence`、`missing-or-mismatched-consolidation-evidence-never-activates`、`manual-destination-resumes-after-governance-approval`、`source-stale-is-kept-visible-and-recorded`、`crash-at-every-write-resumes-same-attempt`、`partial-absorption-never-rolls-back-destination`、`source-bundle-retained-and-restorable`（T93）、`shadow-consolidation-never-mutates`。
+
+P5 的 `skill-consolidation` stratum 只在 disposable eval composition 中以exact `EvaluationConsolidationPermit` + root-bound `EvaluationConsolidationAuthority` 替代尚未签发的 rollout capability；cluster、planner attestation、whole preflight、destination mutation、P2 promotion policy及其独立 permit/authority、absorption、receipt 与 attempt finalization 均走同一 D14–D19 路径。Production P4b 不解析任何 eval authority/permit。增补验收：`eval-consolidation-permit-binds-case-scope-cluster-and-plan`、`eval-consolidation-authority-substitutes-rollout-capability-only`、`production-consolidator-rejects-eval-authority-or-permit`（T93）。
+
+#### consolidation assembly + metrics extension
+- 拓扑：P4-D20；调用D13–D19并挂入D12 host composition。
+- 职责：host级唯一consolidation Store/runner/timer；P4a ready、P2/P3 reconciliation与P5 authorization验证完成后才开放conservative claim。HMR先停新claim，再settle/defer active attempt；metrics追加cluster/plan/admit/destination/absorbed/skipped-stale/waiting-approval/restore，不把cluster count或LLM summary当质量结论。
+- 验收：`one-consolidator-per-host`、`not-ready-before-p2-p3-reconciliation`、`hmr-drains-or-durably-defers-attempts`、`metrics-separate-structural-and-quality-facts`、`assembly-profile-or-authorization-error-fails-loud`。
+
+## 7. Phase 出口
+
+T82/T90/T91/T93与附件全部测试、per-file 100% coverage、P2+P3+P4 REAL boot全绿；P4a crash/queue/write/HMR证明batch resume不重复、oversized不head-block、fault延后negative lifecycle且不阻止正信号；P4b在每个durable write注入crash，证明destination-first、waiting approval、partial absorption、source stale与restore。Keyless snapshot覆盖provider meta重放、PTC non-load、late/oversized/corrupt outcome、bounded cluster、umbrella/support-file destination、auto/manual destination和source restore；README/Agent Note说明load非quality、lifecycle与semantic consolidation分离、Host不证明semantic preservation、无物理清理与non-Git cwd限制；持久字段变化更新snapshot与双SDK expected outputs（若投影对应字段）。

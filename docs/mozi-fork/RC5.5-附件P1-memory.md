@@ -1,8 +1,8 @@
-# RC5.5.4 附件 P1 — Memory Service 与 durable recall（函数级规格）
+# RC5.5.5 附件 P1 — Memory Service 与 durable recall（函数级规格）
 
 > 上位：`RC5.5-函数级规格总纲.md`；前置：P0；包：`packages/util/content-scan`、`packages/memory/memory`，以及通用 `agent`/`agent-loop` surface-intent 小扩展；日期：2026-09-02。
 >
-> 当前代码状态：content-scan、memory types/domain/fold 与第一版 Service/Publisher 已提交。RC5.5.4 保留 mutation/Service 与纯函数成果；Publisher 的 latest-log lookup、append-only 与 stale fail-open 语义必须在 P1-R3 前替换为 current-surface 协议。
+> 当前代码状态：content-scan、memory types/domain/fold 与第一版 Service/Publisher 已提交。RC5.5.5 不改变RC5.5.4已闭合的P1函数拓扑；Publisher 的 latest-log lookup、append-only 与 stale fail-open 语义必须在 P1-R3 前替换为 current-surface 协议。
 
 ## 1. 模块布局
 
@@ -105,7 +105,7 @@ MemoryConfig = {maxEntries,maxStoredChars,maxEntryChars,maxSnapshotTokens,
 
 #### `memoryResultDigest(op, resultingEntry?): string`
 - 拓扑：P1-D04。
-- 职责：receipt 的资源执行结果摘要；不是 ReviewPlan identity。原 `canonicalOpDigest(HostMemoryOp)` 在 RC5.5.4 对齐前已改名，禁止 P3 调用。
+- 职责：receipt 的资源执行结果摘要；不是 ReviewPlan identity。原 `canonicalOpDigest(HostMemoryOp)` 在 RC5.5.5 对齐前已改名，禁止 P3 调用。
 - 验收：`memory-result-digest-stable`、`memory-result-digest-not-plan-identity`（T76）。
 
 #### `enforceBudget(nextState, config): void`
@@ -171,7 +171,7 @@ MemoryConfig = {maxEntries,maxStoredChars,maxEntryChars,maxSnapshotTokens,
 
 #### `findVisibleMemorySnapshot(session): VisibleMemorySnapshot | undefined`
 - 拓扑：P1-D16。
-- 职责：只遍历 `session.surface.nodes` 并读取对应 durable event；只认 source kind memory + form snapshot + RC5.5.4 publication schema，校验 available/unavailable discriminant、protocol digest、scope revision 与 payload digest。历史 log 中已被 replacement/compaction shadow 的 memory event不算 visible。零项返回 undefined；两项及以上是 pre-release incompatible state，返回 `invalid_structure`，不得用跨非连续 range 的 replacement 擦除中间会话消息。
+- 职责：只遍历 `session.surface.nodes` 并读取对应 durable event；只认 source kind memory + form snapshot + RC5.5.5 publication schema，校验 available/unavailable discriminant、protocol digest、scope revision 与 payload digest。历史 log 中已被 replacement/compaction shadow 的 memory event不算 visible。零项返回 undefined；两项及以上是 pre-release incompatible state，返回 `invalid_structure`，不得用跨非连续 range 的 replacement 擦除中间会话消息。
 - 验收：`visible-memory-derived-from-session-surface`（T87）、`shadowed-log-memory-is-not-visible`、`compaction-shadowed-memory-returns-undefined`、`malformed-visible-memory-fails-loud`、`multiple-visible-memory-nodes-fail-loud`、`non-memory-surface-nodes-ignored`。
 
 #### `decideMemoryPublication(visible,outcome): MemoryPublicationDecision`
@@ -193,4 +193,4 @@ MemoryConfig = {maxEntries,maxStoredChars,maxEntryChars,maxSnapshotTokens,
 
 Config 数值全带 JSDoc、显式默认或 required；禁止在 `run()` 内 `??` 隐式默认。`publisherEnabled` 的既定默认为 true；其余默认若需要必须在 schema 与 README 同一处声明。`receiptWindowSize` 只约束 finalized/direct terminal ring，不得用于尚未 finalized 的 review pending。
 
-Phase 出口：RC5.5.4 对齐测试 + 原附件测试全绿；per-file 100%；REAL boot 证明单 Service、current-surface append/replace、compaction 后 republish、读失败 unavailable 与 direct governance；keyless snapshot 覆盖 correction/remove 后 memory authority 消失、replay 恰一个 current authority；README/Agent Note 说明 scanner 非完备、non-Git cwd、user principal、receipt 生命周期、surface ownership 与 unavailable 语义。D15 的 agent/loop API 变更同步更新 `docs/architecture.md`、生成 API catalog、必要双 SDK expected outputs；P1 未完成前不得进入 P2。
+Phase 出口：RC5.5.5 对齐测试 + 原附件测试全绿；per-file 100%；REAL boot 证明单 Service、current-surface append/replace、compaction 后 republish、读失败 unavailable 与 direct governance；keyless snapshot 覆盖 correction/remove 后 memory authority 消失、replay 恰一个 current authority；README/Agent Note 说明 scanner 非完备、non-Git cwd、user principal、receipt 生命周期、surface ownership 与 unavailable 语义。D15 的 agent/loop API 变更同步更新 `docs/architecture.md`、生成 API catalog、必要双 SDK expected outputs；P1 未完成前不得进入 P2。
