@@ -1,19 +1,21 @@
-# 自我进化机制方案 RC5.5.3（第九轮协议闭合与拓扑重排）
+# 自我进化机制方案 RC5.5.4（第十轮执行环境与发布权威闭合）
 
 > 状态：设计备忘（fork 侧工作文档，登记于 translation-pairing 排除清单）
 >
-> 版本脉络：RC5.5.2 → `第九轮评审建议.md` 证据复核版 → `RC5.5.3-第九轮评审核验与处置.md` → 本 RC5.5.3。第九轮初评中被复核撤回的 requestDigest、自引用、当前跨 LLM provider 与 release-before-finalized 结论不进入本版。
+> 版本脉络：RC5.5.3 → `RC5.5.4-第十轮评审核验与处置.md` → 本 RC5.5.4。第九轮已闭合协议继续有效；第十轮只改 memory 当前可见权威、review 执行授权、P4 outcome 分批游标与 orphan reclaim 取舍。
 >
 > 函数级规格：`RC5.5-函数级规格总纲.md` + 附件 P0–P5；文件名保持稳定，内容原位升版，避免并存两套权威规格。
 >
-> 证据基线：DeepSeek Harness `16bd8323def3178fb6c21e008e9e2c28d2458896`；mozi-hermes-agent `05c248d8a6c7f6d0d26efbb35fba3d6dfeb36a06`；日期：2026-09-01。
+> Agent Note：`../../.agents/notes/proposed/architecture/2026-09-02-replay-authoritative-self-evolution.md`。
 >
-> 阶段裁定：RC5.5.3 = **Architecture Frozen / Implementation Approved**。P1 已提交的纯函数层保留，但 Service 前先完成 RC5.5.3 对齐批；P2 先叶子函数后 mutation/tool；P3 必须按 canonicalization → admission → durable stores → finalization → live/history orchestration 的拓扑开发；P4 after P3；P5 质量门通过前保持 shadow。
+> 证据基线：DeepSeek Harness `16bd8323def3178fb6c21e008e9e2c28d2458896`；mozi-hermes-agent `05c248d8a6c7f6d0d26efbb35fba3d6dfeb36a06`；日期：2026-09-02。
+>
+> 阶段裁定：RC5.5.4 = **Architecture Frozen / Implementation Approved**。该裁定以 P1-R3 改走 loop-committed surface intent、P3 conservative claim 先完成 execution authorization、P4 使用 outcome 内分批游标为前提；已完成的 P1 mutation/Service 工作保留，旧 Publisher 规格不再获准继续实现。P5 质量门与 execution authorization 均通过前只允许 shadow。
 
-## 0. RC5.5.3 的问题闭合
+## 0. RC5.5.4 的问题闭合
 
 1. **direct operation 身份与 receipt**：review op 由 attempt/plan 派生并先入 pending；前台 `skill_manage` 与 memory 治理分别由 durable `ToolCallId`/`CommandId` 派生 op id，并在资源提交的同一 RMW 中直接进入 bounded terminal ring。P1/P2 不导入 P3。
-2. **planner 隔离与非递归**：review provider 必须支持 `toolFilter/outputSchema/persona/agentOptions`、必须 `inheritsParentContext=false`；请求固定 `toolFilter:{allow:[]}`；只有 root session 可触发。spawn 仍继承 standing composition，本版以真实请求 snapshot 和 Host evidence admission 约束它，不声称绝对空白上下文。
+2. **planner 隔离与非递归**：review provider 必须 fresh、支持 isolated complete prompt/runtime-context suppression 与实际 request attestation；只有 root session 可触发。请求固定普通工具 `allow:[]`，但 `outputSchema` 安装的 scoped `structured_output` 仍可见且必须恰好成功一次。
 3. **finalization 最后崩溃点**：定序为 mark terminal → apply cursor disposition → mark finalized → assign/index stable outcome ordinal → acknowledge finalized receipts → release cursor；review receipt 在 ledger finalized 前仍处 pending 且不淘汰，启动先修复 unfinalized terminal、缺 ordinal/index 与 finalized+occupied，之后才允许 claim。
 4. **memory 精确定位**：update/remove 计划和 Host op 必须携 `targetEntryId/expectedEntryDigest`；`targetHint` 只作说明，不参与选择。
 5. **结果证据**：Host 从 durable events 提取 user-authored、tool-success、tool-failure、failure-recovered、unresolved、unknown 等结构信号；turn completed 与 assistant 自称成功均不是任务成功。unresolved 经验不得进入可见 memory/skill。
@@ -31,6 +33,12 @@
 17. **pending receipt 有界背压**：required `maxConcurrentReviews × maxPlanOps` 给 review pending 数量硬上界；durable inFlight 占用在重启后重建，cleanup 未收敛时禁止新 acquired，但不阻断正常 Agent。
 18. **孤儿 revision 数量背压**：P2 除 orphan bytes 外还限制每项目 incomplete+orphan revision count；零字节 partial 也计数，避免“不物理删除”被无限空目录绕过。
 19. **usage 重放有界且不重复**：P4 分别以 durable session seq、P2 bounded revision lineage 与 P3 outcome ordinal 扫描；page 结算持有 source mutex，recent receipt 窗口必须覆盖任一整页，避免 crash-before-checkpoint 后重复计数或永久保存所有 signal id。
+20. **memory 当前可见权威**：`ContextForm='snapshot'` 只描述语义，不改变 session surface。P1 以 `session.surface.nodes` 查唯一当前 memory 节点；最终 pre-step enter decision 的每条 message 都必须有且只有一个 `SurfaceIntent`，由 agent-loop 在 `step/start` 后提交 append/replace。旧节点被 compaction shadow 后即使 digest 相同也重新 append。
+21. **纠错后的失败安全**：available snapshot 持久化 scope revision 与 publication protocol digest。Publisher 无法证明当前 visible snapshot 对应 authoritative state 时，用不含旧正文的 fixed unavailable snapshot 替换；不保存 runtime-only dirty bit，不让读失败继续暴露已纠正事实。
+22. **实际执行授权**：P5 authorization 按 `ReviewAuthorizationScopeDigest` 授权受测 provider route、resolved call config、adapter execution profile、隔离 system/tools、schema 与 policy versions。P3 在 conservative claim 前选择已授权 scope，并在任何资源 mutation 前以 child 的实际 `request/header` 验证 `ReviewRequestAttestation`；不匹配进入 manual，零资源写入且不 advance。
+23. **planner 结构化工具例外**：DSH 的 `outputSchema` 由 scoped `structured_output` 工具实现；planner 只能看见并恰好成功调用该工具一次，普通业务工具全部不可见且不可执行。空工具断言被 structured-only 断言取代。
+24. **outcome 内可恢复游标**：P4 以 ordinal、outcome digest、signal derivation version 与稳定 signal coordinate 分批结算一个 outcome。oversized 是正常多批工作，不形成 coverage gap；真正损坏的 outcome 进入 durable unresolved fault，后续正信号可继续，负向 lifecycle 在人工修复前关闭。
+25. **orphan reclaim 取舍**：P2 继续以 byte+count 配额 fail-closed，不在核心 authoring Phase 引入物理删除。未来治理 reclaim 必须在 mutation maintenance lock 下重验全部权威引用、先 durable prepare 再 quarantine/delete；它是 S2 运维能力，不阻断 P2。
 
 ## 1. 第一原则
 
@@ -48,7 +56,7 @@
 
 ```text
 ProjectKey                 = Branded<'ProjectKey'> = hash(ctx.fs.resolve(projectRoot).targetKey)
-UserKey                    = Branded<'UserKey'>，仅由未来 principal provider 给出；RC5.5.3 不生成默认值
+UserKey                    = Branded<'UserKey'>，仅由未来 principal provider 给出；RC5.5.4 不生成默认值
 MemoryScope                = {kind:'project', projectKey} | {kind:'user', userKey}
 OpId                       = Branded<'OpId'>；各包可声明同一 brand，不建立反向 package dependency
 ReviewOperationOrigin      = {kind:'review', opId}
@@ -61,6 +69,10 @@ HostMemoryOp               = add{opId,entryId,now,content,...}
                             | update/remove{opId,entryId,expectedEntryDigest,now,...}
 MemoryState                = {schemaVersion, revision, entries,
                               appliedOps:{pendingReceipts,recentTerminalReceipts}}
+MemorySurfaceSnapshot      = available{scopeRevisions,publicationProtocolDigest,digest,sections}
+                            | unavailable{publicationProtocolDigest,reasonCode,fixedText}
+VisibleMemorySnapshot      = {seq,status,digest?,scopeRevisions?,publicationProtocolDigest}
+PreStepSurfaceIntent       = {messageId,surfaceIntent}
 
 ManagedSkillRef            = {projectKey, skillId}
 ManagedRevisionId          = hash(skillId, requestedByOpId)
@@ -71,7 +83,11 @@ ManagedSkillRecord         = {projectKey,skillId,name,owner,state,currentRevisio
                               pinned,lifecycle anchors}
 NameReservation            = {skillId,reservedByOpId}
 
-ReviewCursorLaneId         = hash(sessionId, policyVersion, learningViewVersion, rolloutLevel)
+ReviewAuthorizationScopeDigest = hash(reviewProvider,routeExecutionProfile,canonicalEpochHeader,
+                                      outputSchemaDigest,policy/learning/op/eval versions)
+ReviewRequestAttestation   = {scopeDigest,actualEpochHeaderDigest,childSessionId}
+ReviewCursorLaneId         = hash(sessionId, policyVersion, learningViewVersion, rolloutLevel,
+                                  reviewAuthorizationScopeDigest)
 ReviewCursorLane           = {reviewedThroughSeq,desiredThroughSeq,
                               inFlight?:{attemptId,resumeRetryCount,resumeBlockedUntil?},nextAttemptNo,
                               retryCountSinceAdvance,supersedeCountSinceAdvance,
@@ -91,6 +107,8 @@ ReviewPlan.skills          = create-draft | patch-draft（patch 携 exact ref/re
 OutcomeSignal              = user-authored | tool-success | tool-failure | failure-recovered
                             | unresolved | transient | unknown
 HistoricalScanCheckpoint   = {cycle, after?:{createdAt,sessionId}, notBefore?}
+FinalizedOutcomeScanCheckpoint = {afterOrdinal?,inProgress?:{ordinal,outcomeDigest,
+                                     signalDerivationVersion,afterSignalCoordinate?}}
 ```
 
 `REVIEW_OP_IDENTITY_VERSION = 1` 是协议常量，不是部署 tunable。`enumeratePlanOps` 固定先 memory、后 skills，各数组保持模型输出顺序，`stableOpIndex` 是合并序列的零基索引；canonical digest 编码完整 validated plan op 与 identity version，排除 Host 后加的 opId/entryId/clock/resolved ref。
@@ -112,13 +130,19 @@ HistoricalScanCheckpoint   = {cycle, after?:{createdAt,sessionId}, notBefore?}
 
 ```text
 live root trigger ─┐
-                   ├─ isReviewEligibleSession ── ReviewClaimCoordinator ── claimDue(cursor lane)
+                   ├─ isReviewEligibleSession ── resolve execution scope/select lane
 cold-root scan ────┘                                  │
+                                                     v
+                                  ReviewClaimCoordinator ── claimDue(cursor lane)
+                                                     │
                                                      v
                                     projectEvents + classifyOutcomeSignals
                                                      │
                                                      v
-                                      tool-free fresh ReviewPlanner
+                               structured-output-only fresh ReviewPlanner
+                                                     │
+                                                     v
+                               persist + verify actual request attestation
                                                      │
                                                      v
                          persist immutable plan → enumerate/canonicalize/derive op ids
@@ -143,7 +167,9 @@ cold-root scan ────┘                                  │
                           next pre-step memory snapshot / user skill approval and catalog
 ```
 
-Review child 的工具目录为空且执行也被拒；它没有父 conversation seed。继承的 standing prompt、host context publisher 与 current resource summaries 均不拥有 evidence authority。Host 只接受 `LearningView` 中可定位的 durable seq/span 和 outcome signal。
+Review child 没有父 conversation seed，使用 review-owned complete system prompt 并 suppress runtime context；普通工具目录为空，scoped `structured_output` 是唯一可见工具且只能成功一次。Host 只接受 `LearningView` 中可定位的 durable seq/span 和 outcome signal。
+
+MemoryPublisher 不把 message 直接 append 到 session。它先从 `session.surface.nodes` 找当前 memory node，再把 available/unavailable message 与按 message id 关联的 append/replace intent写入最终 pre-step decision；agent-loop 只在该 decision 未被外层 listener reject 或重写丢弃后提交。首次发布 append；state 或 publication protocol 改变时 replace 当前 node；当前 node 已被 compaction shadow 时重新 append；相同 available authority no-op。RC5.5 尚未发布，发现两个当前 memory node 视为不兼容旧状态并 fail-loud，不以跨非连续 surface range 的 replacement 擦除会话历史。
 
 `tool-success` 只证明 execution 非 error：它可支持 project fact 或仍不可见的 managed skill draft，不能单独让 procedure/caution memory 上线。Host recovery 只配对同 root turn、同 invocation fingerprint（工具名 + canonical durable arguments）的失败与 later success；同为 generic shell 但参数不同不算。可见 procedure、recovery 与 caution 需要明确 user correction 或该结构 recovery；参数改变的 repair sequence 只能先形成隐藏 draft。unresolved/transient/assistant-only 一律零可见 mutation。
 
@@ -157,7 +183,9 @@ Review child 的工具目录为空且执行也被拒；它没有父 conversation
 
 HistoricalReviewCoordinator 稳定枚举授权的 persisted root sessions，过滤 child、无 cwd、禁用 session、时间/项目范围与当前 preset；每处理一项后更新 checkpoint。冷 session 用 all-projections observation 读取最新 `agentPreset`，以 `agents.resume(setup: presets.mount(...))` 恢复，review 到 observation cursor 后释放 handle。若 session 已 live，直接使用 live Agent；两条路径最终都由同一 cursor RMW 决胜。
 
-cursor lane identity 包含 rollout level。shadow lane 可以 advance 自己的 high-water，但 proposal 永远是 audit-only；升级 conservative 产生新 lane，由实时触发和历史 coordinator 重审，不修改旧 lane、不直接提交 shadow plan。P5 gate 失败保持 shadow，成功也只授权 composition/config 切换，不绕过新 lane admission。
+live 与 historical 路径在 claim 前解析同一个 review execution scope。未授权或无法生成可核验 attestation 的 scope 只能选择 shadow lane，不得先占 conservative lane再降级；authorized scope digest 参与 lane identity，签字人或报告重新签署但执行 scope 未变时不制造新 lane。planner 完成后持久化并验证实际 request attestation；不匹配的 conservative attempt 进入 manual，零资源 mutation、零 high-water advance。
+
+shadow lane 可以 advance 自己的 high-water，但 proposal 永远是 audit-only；升级 conservative 产生新 lane，由实时触发和历史 coordinator 重审，不修改旧 lane、不直接提交 shadow plan。每个 provider/model/execution scope 独立通过 P5；不同 scope 的样本不能合并。authorization 只批准执行 scope，不批准任何具体 plan。
 
 ## 7. 治理与 provenance
 
@@ -167,17 +195,17 @@ ReviewAttempt immutable plan 与 opStates 是 review provenance authority；Gove
 
 ## 8. Phase 与开发顺序
 
-1. **P0**：现有 68 项 Evidence Lock 保持为 test-tree 历史记录；T69–T86 是后续生产测试，其中 T85/T86 取代 T67/T68 的生产 finalization 顺序/admission 分类，不伪装成 P0 已完成。
-2. **P1 对齐批**：先改 types/domain 与 pure helpers，再写 Service，再写 Publisher/assembly；具体拓扑见附件 P1。
+1. **P0**：现有 68 项 Evidence Lock 保持为 test-tree 历史记录；T69–T90 是后续生产测试，其中 T85/T86 取代 T67/T68 的生产 finalization 顺序/admission 分类，T87–T90 闭合第十轮四项协议，不伪装成 P0 已完成。
+2. **P1 对齐批**：types/domain 与 pure helpers → Service → generic loop-committed total surface-intent mapping → visible-surface lookup/publication decision → Publisher/assembly；具体拓扑见附件 P1。
 3. **P2**：types/config（含 orphan byte+count caps）→ identity/structure → receipt helpers → store/provider/conflict/quota → batch preflight/authoring → governance/Service → tool；具体拓扑见附件 P2。
-4. **P3**：types/projection/outcome/canonical/targets/admission → settlement/cursor/claim coordinator → ledger/finalization → planner/runtime → live/history/governance；具体拓扑见附件 P3。
-5. **P4**：durable invocation provider → usage classification/coverage/transition → usage/checkpoint Store → session/revision/outcome source reconciliation → curator → metrics；具体拓扑见附件 P4。
-6. **P5**：manifest/fixtures → keyless replay → disposable eval-domain materialization → controlled runner → scorer → gate/report；具体拓扑见附件 P5。
+4. **P3**：先完成隔离 prompt/execution-profile 既有 seam 小扩展，再按 types/projection/outcome/canonical → authorization scope → identity/targets/admission → settlement/cursor/claim coordinator → ledger/finalization → planner attestation/runtime → live/history/governance；具体拓扑见附件 P3。
+5. **P4**：durable invocation provider → usage classification/coverage → deterministic outcome batch → transition → usage/checkpoint Store → session/revision/outcome source reconciliation → curator → metrics；具体拓扑见附件 P4。
+6. **P5**：manifest/fixtures + execution scopes → keyless replay → disposable eval-domain materialization → per-scope controlled runner → scorer → gate/report/authorization；具体拓扑见附件 P5。
 
 每个 Phase 出口需要 focused behavior tests、per-file 100% coverage、REAL composition、HMR/teardown、必要的 keyless session snapshot、双 SDK projection（事件/wire 面变化时）、README/Agent Note 与仓库文档门。调用者的开发不得早于被调用函数的测试通过。
 
 ## 9. 非目标与限制
 
-不改 `agent-loop`；不让 planner 调 mutation tools；不做向量检索、跨设备同步、多 Host 共享存储或断电级分布式事务；不把 scanner 宣称为完备安全证明；不在 L1 启用 user scope；不提供无 principal 的 user fallback；不物理删除 orphan skill bundles；不把 best-effort usage absence 当作归档证据；不直接提升 shadow proposal。
+不让 planner 调 mutation tools；不做向量检索、跨设备同步、多 Host 共享存储或断电级分布式事务；不把 scanner 宣称为完备安全证明；不在 L1 启用 user scope；不提供无 principal 的 user fallback；不在 P2 核心 Phase 物理删除 orphan skill bundles；不把 best-effort usage absence 当作归档证据；不直接提升 shadow proposal。P1 允许且只允许为所有 pre-step producer 增加通用、loop-committed surface intent；memory 策略仍完全由插件拥有，并同步更新 `docs/architecture.md`。
 
 首版 crash model 是 Host/process crash + restart。Git 项目按 nearest `.git` 聚合；非 Git 项目按创建 session 的 cwd 分 scope，子目录可能分裂，诊断必须显示该 identity source。

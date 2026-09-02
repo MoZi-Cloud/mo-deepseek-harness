@@ -1,6 +1,6 @@
-# RC5.5.3 附件 P2 — skill-managed Service（函数级规格）
+# RC5.5.4 附件 P2 — skill-managed Service（函数级规格）
 
-> 上位：`RC5.5-函数级规格总纲.md`；前置：P1；包：`packages/skill/skill-managed`；日期：2026-09-01。
+> 上位：`RC5.5-函数级规格总纲.md`；前置：P1；包：`packages/skill/skill-managed`；日期：2026-09-02。
 >
 > package default export 是 host 级唯一 `ManagedSkillService`；named `skill_manage` 是 authoring preset 的薄工具插件。P2 不导入 `session-review`，review caller 只传结构相同的 branded `OpId` 与 `origin.kind='review'`。
 
@@ -172,5 +172,7 @@ D16 必须最后开发；工具不得临时随机生成 requestedBy。D12/D13 �
 ## 7. Config 与 Phase 出口
 
 Config 至少包含 `managedProviderRank`、`maxFiles/maxTotalBytes/maxFileBytes`、`scanAgentCreatedSkills`、`managedRootName`、`writableRoot`、`maxRevisionsPerSkill/maxManagedBytesPerSkill/maxManagedBytesPerProject/maxOrphanBytesPerProject/maxUncommittedRevisionsPerProject` 与 required `receiptWindowSize`。默认全部在 schema/README 声明；不得依靠 implementation-only constant。因为首版不物理删除 incomplete/orphan，数量配额触发时诊断必须列出 operator 可检查的 exact paths；服务不得静默放宽上限或自动删除。
+
+RC5.5.4 不把 orphan reclaim 加入 P2-D01–D16。当前 byte+count 配额已使故障积累有界并 fail-closed；自动删除会引入 lineage、pending、reservation 与 review-attempt 引用竞态。未来人工治理 reclaim 若立项，输入必须是 branded revision identity + expected bundle/inventory digest，不接受 caller raw path；Host 在 project mutation maintenance lock 下重验 current/pending/reservation/retained lineage 以及 P3 planned/committing/manual 引用，先写 durable prepared operation，再 rename 到 managed quarantine，重验后删除并记录 terminal/tombstone。quarantine 仍计配额，crash recovery 与 same-op replay 语义必须先钉死。该后续能力不阻断本 Phase，也不能由管理员手删路径替代协议。
 
 Phase 出口：T69/T81 与原 P2 矩阵全绿；per-file 100%；REAL boot 覆盖 create→draft→approve→visible、active patch→pending→activate、direct/review receipt、same-call crash retry、人工同名层级与 restore；snapshot 更新工具结果/错误码；README/Agent Note 说明 storage-only catalog、read revalidation、direct/review receipt、无物理 GC、non-Git cwd 与 archived restore。

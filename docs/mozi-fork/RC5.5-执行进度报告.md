@@ -1,8 +1,8 @@
-# RC5.5.3 执行进度报告（无人值守交接载体）
+# RC5.5.4 执行进度报告（无人值守交接载体）
 
 > 用途：本文件是自我进化机制无人值守开发的唯一进度与交接载体。每个实现批次完成后追加 §3 台账，与改动同步提交。
 >
-> 权威方案已原位升为 RC5.5.3：`RC5.5-函数级规格总纲.md` + 附件 P0–P5 + `RC5.5.3-第九轮评审核验与处置.md`。P0 已完成；P1 批A、批B、批C 已提交，P1 收尾批未开始。冷启动另读 `RC5.5-交接稿.md`。
+> 权威方案已原位升为 RC5.5.4：`RC5.5-函数级规格总纲.md` + 附件 P0–P5 + `RC5.5.4-第十轮评审核验与处置.md`。P0 已完成；P1 批A、旧批B、批C 已提交，P1-R1/R2/R3 仍须按新版闭合。批C 的 append-only Publisher 是待替换实现，不是 P1-R3 完成证据。冷启动另读 `RC5.5-交接稿.md`。
 
 ## 1. 常备协议
 
@@ -18,13 +18,13 @@
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | P0 | Evidence Lock 68 项（66 活跃 + 2 历史回归；实跑 72 tests）+ E0 结案 | **完成** |
-| P1 | `content-scan` + `memory`；RC5.5.3 types/config/fold/preflight/Service/Publisher | **进行中**：批A、批B、批C 已提交，P1 收尾批未开始 |
+| P1 | `content-scan` + `memory` + generic loop surface intent；RC5.5.4 types/config/fold/preflight/Service/current-surface Publisher | **进行中**：批A、旧批B、批C 已提交；R1–R3 未完成 |
 | P2 | `skill-managed`；identity/receipt/lineage/preflight/authoring/provider/tool | 未开始 |
-| P3 | host-level `session-review`；projection/outcome/plan/cursor/ledger/finalization/live/history/governance | 未开始 |
-| P4 | `skill-curator`；usage class/coverage/state machine/observer/maintenance | 未开始 |
-| P5 | fixtures/runner/scorer/gate/report + shadow→conservative 授权 | 未开始；有可执行代码面，无 runtime package |
+| P3 | planner execution primitives + host-level `session-review`；authorization/projection/plan/cursor/ledger/finalization/live/history/governance | 未开始 |
+| P4 | `skill-curator`；usage class/coverage/outcome batch/fault/state machine/observer/maintenance | 未开始 |
+| P5 | per-scope fixtures/runner/scorer/gate/report + signed shadow→conservative authorization | 未开始；有可执行代码面，无 runtime package |
 
-包 DAG 为 `content-scan → memory`、`content-scan → skill-managed`、`memory + skill-managed → session-review`、`skill-managed + session-review → skill-curator`、`session-review + skill-curator → P5`。实施顺序固定 P0→P1→P2→P3→P4→P5。
+包 DAG 为 `content-scan + agent/loop surface intent → memory`、`content-scan → skill-managed`、`memory + skill-managed + planner execution primitives → session-review`、`skill-managed + session-review → skill-curator`、`session-review + skill-curator → P5`。实施顺序固定 P0→P1→P2→P3→P4→P5。
 
 ## 3. 已提交阶段台账（追加式）
 
@@ -43,22 +43,27 @@
 - `00e6658986`：`types.ts/domain.ts/fold.ts`、receipt 二分、第一版 fold/publication tests、包骨架；`src/index.ts` 仍只 re-export，没有 Service/Publisher。
 - `1228a9720b`：回填台账与交接稿。
 - `16bd8323de`：`OpId` 改为 `Branded<'OpId'>` 并同步当时 RC5.5 规格。
-- RC5.5.3 复核后，该实现还缺 `UserKey`、discriminated add/update/remove、exact entry digest、`createdByOpId`、`memoryResultDigest`、config/publication proof、read-only preview、direct-terminal API 与 Service/Publisher，因此不能直接从旧“批C”开始。
+- RC5.5.4 复核后，该实现还缺 `UserKey`、discriminated add/update/remove、exact entry digest、`createdByOpId`、`memoryResultDigest`、config/publication proof、read-only preview、direct-terminal API 与 current-surface publication，因此不能把旧批B/批C视为新版节点完成。
 
 ### P1 批C — MemoryService、Publisher 与 scope resolution：已提交，不等于 P1 完成
 
 - `f8547babfd`：`service.ts`（`MemoryService extends Service`，唯一 memory domain opener；`applyOps` 顺序为 fold 内 receipt 去重 → base-revision 检查 → write-boundary `scanContent` → 原子 `put`；`acknowledgeTerminalOps` 经 `splitReceipts` 幂等）、`resolveMemoryScope`（`findProjectRoot` → `fs.resolve` targetKey sha256 → `ProjectKey`，无 cwd 回 user scope）、`latestPublishedMemory`（session events 逆扫 `user/message` + `source.kind === 'memory'`）、`publisher.ts`（prepend pre-step，sanitize → sections → composite digest，digest 变化时发布一条 `CompositeMemorySnapshot`，全 fail-open）、`MessageSourceMap` 'memory' merge、`invariant.ts`（durable 记录 schemaVersion/revision 检查）、28 条 service/publisher acceptance tests；`MemoryErrorCode` 扩 `threat_scan_blocked`/`stale_base_revision`；package 依赖补 cordis/dsh-agent/dsh-session/dsh-fs/schemastery/dsh-invariants。
 - `117ea368dd`：同步 `pnpm-lock.yaml` 中 memory 包新增依赖。
-- 已知未达 RC5.5.3 附件项：D01–D11 的 RC5.5.3 类型对齐（`UserKey`、discriminated HostMemoryOp、exact entry digest、`createdByOpId`、`memoryResultDigest`、`maxRenderedSnapshotChars`、`validateMemoryConfig`）未做；D14 的 `previewOps`（零写入 preview）、`applyDirectOps`、`acknowledgeFinalizedOps` 未实现，`applyOps` 当前直接 fold 而非调共用 `evaluateMemoryOps`；E0-12 remote-backend fail-loud 仅有测试占位，`resolveMemoryScope` 未对非 local fs 做 guard；D17 assembly（真实 composition/Loader 挂载）未做。
+- 已知未达 RC5.5.4 附件项：D01–D11 的类型对齐（`UserKey`、discriminated HostMemoryOp、exact entry digest、`createdByOpId`、`memoryResultDigest`、available/unavailable snapshot、`maxRenderedSnapshotChars`、`validateMemoryConfig`）未做；D14 的 `previewOps`、`applyDirectOps`、`acknowledgeFinalizedOps` 未实现，`applyOps` 当前直接 fold 而非调共用 `evaluateMemoryOps`；E0-12 remote-backend fail-loud 仅有测试占位；D15 generic loop surface intent、D16 visible lookup、D17 publication decision、D19 assembly 未做。现有 `latestPublishedMemory`/Publisher 是 append-only + stale fail-open，必须由 D16–D18 替换。
+
+### RC5.5.4 第十轮协议修订：设计已形成
+
+- 以 pinned DSH/Hermes 基线裁定四项：memory current surface 与 unavailable fail-safe 采纳；review authorization 改为 pre-claim stable scope + actual request attestation，structured output是唯一 planner 工具；P4 oversized outcome改为 stable-coordinate batch resume，corrupt item另设 unresolved fault；orphan reclaim降为不阻断 P2 的后续人工治理能力。
+- 总纲和附件 P0–P5 已重排调用拓扑；P1-R1/R2 可保留方向，P1-R3、P3、P4、P5 必须按 RC5.5.4 新节点实施。
 
 ## 4. 当前精确接手位置
 
-### 4.1 P1-R1：RC5.5.3 类型、domain 与纯函数对齐（未开始，批C 未触碰）
+### 4.1 P1-R1：RC5.5.4 类型、domain 与纯函数对齐（未开始，批C 未触碰）
 
 1. P1-D01 先红：`UserKey`、keyed user scope、discriminated HostMemoryOp、`expectedEntryDigest`、`createdByOpId`、preview/result types 和 domain schema；pre-release 不加旧格式 shim。
 2. P1-D02 先红 `maxRenderedSnapshotChars`，再由 D03 `validateMemoryConfig` 调它，证明 scanner cap 和最坏可发布预算；不得把 bound helper 后补进 validator。
 3. P1-D04→D07：`memoryEntryDigest`、`memoryResultDigest`、budget、direct/finalized receipt helper、exact-CAS `foldMemoryOps`；duplicate 仍先于 base/target。
-4. P1-D08→D12：sanitize → renderer → scope/composite digest → snapshot builder → 共用 `evaluateMemoryOps`；property test 证明 every admitted state publishable，preview/apply 尚不做 I/O。
+4. P1-D08→D12：sanitize → renderer → scope/composite digest → available/unavailable snapshot builder → 共用 `evaluateMemoryOps`；property test证明 every admitted state publishable，preview/apply尚不做 I/O。
 
 P1-R1 只在 D01–D12 全绿后结束。现有 memory tests 要随已变更行为替换，不保留 RC5.5.2 可选字段的兼容分支。
 
@@ -69,19 +74,21 @@ P1-R1 只在 D01–D12 全绿后结束。现有 memory tests 要随已变更行�
 
 ### 4.3 P1-R3：Publisher、assembly 与 Phase 收尾（批C 已部分交付）
 
-1. P1-D15 `latestPublishedMemory` 与 D16 `MemoryPublisher`：**已实现**（prepend pre-step、composite digest 对比、fail-open）；publisher 不重复 scope/config/digest 逻辑，Waterfall 成功与失败都必须 `next()`。D17 assembly（真实 composition/Loader 挂载、provider 注册）未做。
-2. 收尾包含 P1 附件全验收、per-file 100%、REAL boot/HMR/crash cases、keyless memory correction/replay snapshot、README/JSDoc/双语 Agent Note，以及事件/wire 面变化时的双 SDK expected outputs。P1 未出 Phase 门前不进 P2。
+1. P1-D15 generic `PreStepSurfaceIntent` carrier + agent-loop commit：未实现；先红真实 final waterfall/replace/replay tests，并要求 final enter messages 与 intents 完整一对一，不保留缺失后默认 append 的兼容语义；loop只拥有提交机制，不写 memory 分支。
+2. P1-D16 `findVisibleMemorySnapshot` → D17 `decideMemoryPublication`：未实现；必须基于 `session.surface.nodes`，不能倒扫 log。compaction shadow 后重新 append；多 visible memory在 pre-release fail-loud。
+3. P1-D18 `MemoryPublisher`：现有批C实现仅可作为待替换代码。新实现不得直接 append；storage/read/render失败时由 D17把 visible available替换为不含旧正文的 unavailable，不能保留旧 snapshot。
+4. P1-D19 assembly与收尾：真实 composition/Loader、architecture/API catalog、per-file 100%、REAL boot/HMR/crash、keyless correction/read-failure/replay snapshot、README/JSDoc/双语 Agent Note及必要双 SDK expected outputs。P1未出 Phase门前不进 P2。
 
 ### 4.4 P2–P5 后续顺序
 
-- P2 按 D01→D16：types/config → project/name/path → canonical identity → structure → receipt → Store primitives/index/orchestration → provider/conflict/quota → read-only batch preflight → create → patch → governance → Service → `skill_manage`。Direct tool 先 canonicalize parsed args，再由 session+ToolCallId 派生 op id；成功 revision 同 CAS 写 immutable lineage，terminal receipt 淘汰后仍以 lineage duplicate-before-base；orphan bytes 与 incomplete+orphan count 双上限覆盖零字节 partial。
-- P3 按 D01→D21：eligibility/projection/outcome → schema/enumeration/identity/target/admission → settlement classification/decision → cursor transitions/Store → host claim coordinator → ledger/finalization → planner/runtime → live/history/governance → host Service。pre-plan transient 才创建 retry attempt；immutable plan 后以同一 attempt/op ids durable resume。finalized 后先把 stable outcome ordinal 写入 attempt并补 derived index，再 ack/release；required `maxConcurrentReviews × maxPlanOps` 限制不可淘汰 pending receipt。P3 调 P1 preview 和 P2 preflight，因此必须后于 P1/P2。
-- P4 按 D01→D11：durable user provider + top-level skill result meta → signal → coverage/effective inactivity anchor → verified structural reuse → lifecycle → Store/session+outcome checkpoints → observer + P2 lineage/P3 ordinal-page reconciliation → curator/metrics/assembly。Model load 必须通过 provider/name/rendered-content digest 绑定；nested PTC 不计；可使 visible stale skill 回 active但不等于 verified success。coverage gap 从恢复时重启完整 inactivity 窗口；source mutex 与整页 receipt-window 证明限制 crash replay 去重状态；archived 只经用户 restore。
-- P5 按 D01→D16：types/threshold math → manifest parse → digest/split/sample validation → fixture load/redaction → isolated composition → keyless replay → eval materialization → controlled runner → scorer/aggregation → gate → report → authorization → repository commands。Gate 通过也只授权新 conservative lane 重审，不执行 shadow plan。
+- P2 按 D01→D16：types/config → project/name/path → canonical identity → structure → receipt → Store primitives/index/orchestration → provider/conflict/quota → read-only batch preflight → create → patch → governance → Service → `skill_manage`。orphan byte+count配额继续 fail-closed；物理 reclaim是后续 S2治理，不进入本 Phase。
+- P3 按 E01→D01→D22：先做 isolated planner prompt、adapter execution profile和provider actual attestation；再做 eligibility/projection/outcome/schema → D06 authorization scope/lane selection → identity/target/admission → settlement/cursor/claim → ledger/finalization → planner attestation/runtime → live/history/governance/Service。authorization在 claim前；actual attestation在 plan/mutation前。普通工具为空，scoped `structured_output`恰好一次。
+- P4 按 D01→D12：durable provider/meta → signal/coverage/reuse → D06 outcome digest+stable-coordinate batch → lifecycle → Store subcursor/fault → observer reconciliation → curator/metrics/assembly。oversized正常多批；corrupt outcome durable fault不 head-block later positive，但 fault修复前关闭负向 lifecycle。
+- P5 按 D01→D16：types/threshold math → per-scope manifest/digest/split/sample validation → fixture load/redaction → isolated composition → keyless replay → eval materialization → per-scope controlled runner/actual attestation → scorer/aggregation → gate/report → signed authorization → repository commands。每个 scope独立达到样本与阈值；Gate通过也只授权新 conservative lane重审，不执行 shadow plan。
 
 ## 5. 验收编号与迁移规则
 
-P0 的 T01–T68 保留原已测事实，但 test-tree reference 不是生产实现。RC5.5.3 新增 T69–T86 分别落 P1–P5，不追记为 P0 已完成；T85/T86 取代 T67/T68 reference 的生产 finalization 顺序/admission 分类。旧 T62–T66 中的 op identity/receipt/applied-only 不变量在生产 Phase 仍需重新证明，生产命名与最终分层以附件为准。
+P0 的 T01–T68 保留原已测事实，但 test-tree reference不是生产实现。RC5.5.4的 T69–T90分别落 P1–P5，不追记为 P0已完成；T85/T86取代 T67/T68 reference的生产 finalization顺序/admission分类，T87–T90覆盖 current-surface、execution authorization、structured-output-only和outcome batch/fault。旧 T62–T66中的 op identity/receipt/applied-only不变量在生产 Phase仍需重新证明，生产命名与最终分层以附件为准。
 
 任何规格调整若修改 canonical identity，必须 bump protocol version 并保留已 planned attempt 的旧版 dispatch；修改 durable schema 按 pre-release stance 提升 owner schema version 并拒绝旧格式，不加 compatibility shim。
 
@@ -89,14 +96,14 @@ P0 的 T01–T68 保留原已测事实，但 test-tree reference 不是生产实
 
 | 事实 | 代码锚点 |
 |---|---|
-| snapshot section/source 和 message projection | `packages/llm/llm/src/message.ts`；`packages/skill/tool-skill/src/index.ts` |
+| snapshot semantic form、真实 surface 与 message projection | `packages/llm/llm/src/message.ts`；`packages/core/session/src/surface.ts`；`packages/core/agent-loop/src/agent.ts` |
 | Waterfall pre-step 和 `next()` | `packages/context/time-context/src/index.ts`；`docs/cordis-primer.md` |
 | storage domain/table/RMW/version errors | `packages/storage/storage-domain/src/spec.ts`；P0 T07/T20/T24/T44 |
 | Service 唯一 opener/effect disposal | `packages/session/session-projection-cache/src/index.ts`；`vendor/cordis/src/service.ts` |
 | root/cold session 枚举与 projection | `packages/session-query/session-query/src/index.ts` |
 | cold Agent resume 和 projected preset mount | `packages/core/agent/src/index.ts`；`packages/preset/agent-preset/src/index.ts` |
 | 历史 request provider/model route | `foldRequestHeader` in `@deepseek-ai/dsh-session` |
-| fresh subagent 及 capabilities | `packages/subagent/subagent/src/index.ts`；spawn provider |
+| fresh subagent、structured output scoped tool 与 capabilities | `packages/subagent/subagent/src/index.ts`；`packages/subagent/subagent-in-process-driver/src/structured.ts`；spawn provider |
 | durable CommandId / ToolCallId | command/session event types；`ToolRunContext` |
 | REAL/keyless replay | `packages/test-support/loader-smoke`；`snapshots/session/compaction-recovery/` |
 
