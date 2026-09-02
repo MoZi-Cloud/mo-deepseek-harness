@@ -1,9 +1,9 @@
 /**
  * Memory capability: per-scope durable recall with anti-replay receipts and a
- * sanitized, digest-gated composite snapshot publication. This module
- * re-exports the type surface, the domain declaration, and the pure fold
- * layer; the `MemoryService`/`MemoryPublisher` assembly mounts in the same
- * package (P1 批C).
+ * sanitized, digest-gated composite snapshot publication. Exports the type
+ * surface, the domain declaration, the pure fold layer, the `MemoryService`
+ * (sole memory-domain opener, T42), and the `MemoryPublisher` pre-step
+ * registration.
  * @module @deepseek-ai/dsh-memory
  */
 
@@ -33,6 +33,19 @@ export {
   splitReceipts,
 } from './fold.ts'
 
+export {
+  ConfigSchema,
+  latestPublishedMemory,
+  MemoryService,
+  resolveMemoryScope,
+  type ApplyOpsResult,
+  type Config,
+} from './service.ts'
+
+export {
+  registerMemoryPublisher,
+} from './publisher.ts'
+
 export type {
   AppliedOpReceipts,
   ApplyOpResult,
@@ -52,3 +65,9 @@ export type {
   ScopePublication,
   TerminalAckGroup,
 } from './types.ts'
+
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    'memory': import('./types.ts').CompositeMemorySnapshot
+  }
+}

@@ -21,7 +21,7 @@ export const MEMORY_DOMAIN_VERSION = 1
 export const MEMORY_STATE_SCHEMA_VERSION = 1
 
 /** Error codes the memory capability throws. */
-export type MemoryErrorCode = 'budget_exceeded' | 'invalid_structure'
+export type MemoryErrorCode = 'budget_exceeded' | 'invalid_structure' | 'threat_scan_blocked' | 'stale_base_revision'
 
 /** Typed error carrying a stable code the callers (and tests) branch on. */
 export class MemoryError extends Error {

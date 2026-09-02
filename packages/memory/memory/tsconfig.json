@@ -9,16 +9,34 @@
   ],
   "references": [
     {
-      "path": "../../util/brand"
+      "path": "../../../vendor/cordis"
     },
     {
-      "path": "../../util/content-scan"
+      "path": "../../../vendor/schemastery"
+    },
+    {
+      "path": "../../core/agent"
+    },
+    {
+      "path": "../../core/session"
+    },
+    {
+      "path": "../../fs/fs"
     },
     {
       "path": "../../llm/llm"
     },
     {
       "path": "../../storage/storage-domain"
+    },
+    {
+      "path": "../../runtime-diagnostics/invariants"
+    },
+    {
+      "path": "../../util/brand"
+    },
+    {
+      "path": "../../util/content-scan"
     }
   ]
 }
