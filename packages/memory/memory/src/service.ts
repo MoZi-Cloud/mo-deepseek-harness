@@ -169,6 +169,7 @@ export class MemoryService extends Service {
    * @param scope - The project or user scope to read.
    * @returns the current memory state.
    */
+  // oxlint-disable-next-line typescript/require-await -- async keeps an uninitialized Service access as a rejected provider call.
   async getState(scope: MemoryScope): Promise<MemoryState> {
     const record = this.requireTable().get(scopeKeyOf(scope))
     if (record === undefined) return initialMemoryState()

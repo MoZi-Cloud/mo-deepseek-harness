@@ -4,9 +4,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { InvariantFailure, InvariantInstaller } from '@deepseek-ai/dsh-invariants'
-import type { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
-import { MEMORY_STATE_SCHEMA_VERSION, memoryDomain } from './domain.ts'
+import type { InvariantInstaller } from '@deepseek-ai/dsh-invariants'
 
 const PACKAGE_NAME = '@deepseek-ai/dsh-memory'
 
@@ -16,30 +14,12 @@ export const name = 'memory-invariant'
 export const inject = ['invariants']
 
 /**
- * Owned relationship: every durable memory record must carry the schema
- * version the fold layer writes and a non-negative integer revision. A
- * record that violates either proves a write path bypassed the fold layer.
+ * No runtime invariant: the storage-domain opener validates every loaded
+ * memory record against the package-owned zod schema, and the typed table
+ * admits writes only from this package's Service. This package does not yet
+ * expose an independent event/data relationship for a periodic comparison.
  */
-const install: InvariantInstaller = Object.assign(
-  (ctx: Context, fail: InvariantFailure) => {
-    const facility = ctx.get('storageDomain') as DomainFacility | undefined
-    if (facility === undefined) return
-    void facility.open(memoryDomain).then((domain) => {
-      for (const [, record] of domain.table('state').entries()) {
-        if (record.schemaVersion !== MEMORY_STATE_SCHEMA_VERSION) {
-          fail(`memory record schemaVersion ${record.schemaVersion} !== ${MEMORY_STATE_SCHEMA_VERSION} — a write path bypassed the fold layer`)
-        }
-        if (record.revision < 0 || !Number.isInteger(record.revision)) {
-          fail(`memory record revision ${record.revision} is not a non-negative integer — a write path bypassed the fold layer`)
-        }
-      }
-      return domain.close()
-    }).catch(() => {
-      // Domain not yet open; the next tick re-checks.
-    })
-  },
-  { inject: [] },
-)
+const install: InvariantInstaller = () => {}
 
 /**
  * Register this package's invariant companion.
