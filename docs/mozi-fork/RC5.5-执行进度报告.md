@@ -2,7 +2,7 @@
 
 > 用途：本文件是自我进化机制无人值守开发的唯一进度与交接载体。每个实现批次完成后追加 §3 台账，与改动同步提交。
 >
-> 权威方案已原位升为 RC5.5.3：`RC5.5-函数级规格总纲.md` + 附件 P0–P5 + `RC5.5.3-第九轮评审核验与处置.md`。P0 已完成；P1 实现进行中，但当前代码仍停在 RC5.5.2 纯函数层，必须先做 RC5.5.3 对齐批。冷启动另读 `RC5.5-交接稿.md`。
+> 权威方案已原位升为 RC5.5.3：`RC5.5-函数级规格总纲.md` + 附件 P0–P5 + `RC5.5.3-第九轮评审核验与处置.md`。P0 已完成；P1 批A、批B、批C 已提交，P1 收尾批未开始。冷启动另读 `RC5.5-交接稿.md`。
 
 ## 1. 常备协议
 
@@ -18,7 +18,7 @@
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | P0 | Evidence Lock 68 项（66 活跃 + 2 历史回归；实跑 72 tests）+ E0 结案 | **完成** |
-| P1 | `content-scan` + `memory`；RC5.5.3 types/config/fold/preflight/Service/Publisher | **进行中**：批A和旧批B已提交，对齐批未实现 |
+| P1 | `content-scan` + `memory`；RC5.5.3 types/config/fold/preflight/Service/Publisher | **进行中**：批A、批B、批C 已提交，P1 收尾批未开始 |
 | P2 | `skill-managed`；identity/receipt/lineage/preflight/authoring/provider/tool | 未开始 |
 | P3 | host-level `session-review`；projection/outcome/plan/cursor/ledger/finalization/live/history/governance | 未开始 |
 | P4 | `skill-curator`；usage class/coverage/state machine/observer/maintenance | 未开始 |
@@ -45,9 +45,15 @@
 - `16bd8323de`：`OpId` 改为 `Branded<'OpId'>` 并同步当时 RC5.5 规格。
 - RC5.5.3 复核后，该实现还缺 `UserKey`、discriminated add/update/remove、exact entry digest、`createdByOpId`、`memoryResultDigest`、config/publication proof、read-only preview、direct-terminal API 与 Service/Publisher，因此不能直接从旧“批C”开始。
 
+### P1 批C — MemoryService、Publisher 与 scope resolution：已提交，不等于 P1 完成
+
+- `f8547babfd`：`service.ts`（`MemoryService extends Service`，唯一 memory domain opener；`applyOps` 顺序为 fold 内 receipt 去重 → base-revision 检查 → write-boundary `scanContent` → 原子 `put`；`acknowledgeTerminalOps` 经 `splitReceipts` 幂等）、`resolveMemoryScope`（`findProjectRoot` → `fs.resolve` targetKey sha256 → `ProjectKey`，无 cwd 回 user scope）、`latestPublishedMemory`（session events 逆扫 `user/message` + `source.kind === 'memory'`）、`publisher.ts`（prepend pre-step，sanitize → sections → composite digest，digest 变化时发布一条 `CompositeMemorySnapshot`，全 fail-open）、`MessageSourceMap` 'memory' merge、`invariant.ts`（durable 记录 schemaVersion/revision 检查）、28 条 service/publisher acceptance tests；`MemoryErrorCode` 扩 `threat_scan_blocked`/`stale_base_revision`；package 依赖补 cordis/dsh-agent/dsh-session/dsh-fs/schemastery/dsh-invariants。
+- `117ea368dd`：同步 `pnpm-lock.yaml` 中 memory 包新增依赖。
+- 已知未达 RC5.5.3 附件项：D01–D11 的 RC5.5.3 类型对齐（`UserKey`、discriminated HostMemoryOp、exact entry digest、`createdByOpId`、`memoryResultDigest`、`maxRenderedSnapshotChars`、`validateMemoryConfig`）未做；D14 的 `previewOps`（零写入 preview）、`applyDirectOps`、`acknowledgeFinalizedOps` 未实现，`applyOps` 当前直接 fold 而非调共用 `evaluateMemoryOps`；E0-12 remote-backend fail-loud 仅有测试占位，`resolveMemoryScope` 未对非 local fs 做 guard；D17 assembly（真实 composition/Loader 挂载）未做。
+
 ## 4. 当前精确接手位置
 
-### 4.1 P1-R1：RC5.5.3 类型、domain 与纯函数对齐
+### 4.1 P1-R1：RC5.5.3 类型、domain 与纯函数对齐（未开始，批C 未触碰）
 
 1. P1-D01 先红：`UserKey`、keyed user scope、discriminated HostMemoryOp、`expectedEntryDigest`、`createdByOpId`、preview/result types 和 domain schema；pre-release 不加旧格式 shim。
 2. P1-D02 先红 `maxRenderedSnapshotChars`，再由 D03 `validateMemoryConfig` 调它，证明 scanner cap 和最坏可发布预算；不得把 bound helper 后补进 validator。
@@ -56,14 +62,14 @@
 
 P1-R1 只在 D01–D12 全绿后结束。现有 memory tests 要随已变更行为替换，不保留 RC5.5.2 可选字段的兼容分支。
 
-### 4.2 P1-R2：scope I/O、Service 与 whole-plan preview
+### 4.2 P1-R2：scope I/O、Service 与 whole-plan preview（批C 已部分交付）
 
-1. P1-D13 `resolveMemoryScope`：`findProjectRoot` → `ctx.fs.resolve` → full targetKey hash；remote backend fail-loud；L1 user 无 principal 返回 `principal_required`。
-2. P1-D14 `MemoryService`：只调用已完成 D12 `evaluateMemoryOps`，依次实现 `previewOps`、review `applyOps`、direct-command `applyDirectOps` 与 `acknowledgeFinalizedOps`。preview 必须零写入，apply 必须在单 record RMW 中重验；review receipt 保持 pending 至 ledger finalized，预检后竞态由 expected base 捕获。
+1. P1-D13 `resolveMemoryScope`：**已实现**（`findProjectRoot` → `fs.resolve` targetKey sha256，无 cwd 回 user scope）；剩余：remote backend fail-loud guard 目前是测试占位，需对非 local fs 真正 throw；L1 user 无 principal 返回 `principal_required` 未做。
+2. P1-D14 `MemoryService`：**已实现** `getState`/`applyOps`/`acknowledgeTerminalOps`，且 applyOps 已满足 duplicate 先于 base 的验收顺序；剩余：`previewOps`（零写入）、`applyDirectOps`、`acknowledgeFinalizedOps` 未实现；`applyOps` 直接调 `foldMemoryOps`，待 D12 完成后改调共用 `evaluateMemoryOps`。
 
-### 4.3 P1-R3：Publisher、assembly 与 Phase 收尾
+### 4.3 P1-R3：Publisher、assembly 与 Phase 收尾（批C 已部分交付）
 
-1. P1-D15 `latestPublishedMemory`，再 D16 `MemoryPublisher`，最后 D17 Service/provider/MessageSourceMap/pre-step assembly；publisher 不重复 scope/config/digest 逻辑，Waterfall 成功与失败都必须 `next()`。
+1. P1-D15 `latestPublishedMemory` 与 D16 `MemoryPublisher`：**已实现**（prepend pre-step、composite digest 对比、fail-open）；publisher 不重复 scope/config/digest 逻辑，Waterfall 成功与失败都必须 `next()`。D17 assembly（真实 composition/Loader 挂载、provider 注册）未做。
 2. 收尾包含 P1 附件全验收、per-file 100%、REAL boot/HMR/crash cases、keyless memory correction/replay snapshot、README/JSDoc/双语 Agent Note，以及事件/wire 面变化时的双 SDK expected outputs。P1 未出 Phase 门前不进 P2。
 
 ### 4.4 P2–P5 后续顺序
