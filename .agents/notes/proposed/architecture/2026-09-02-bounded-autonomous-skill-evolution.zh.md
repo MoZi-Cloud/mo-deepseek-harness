@@ -16,7 +16,7 @@ Historical review 还从来源 Session 的最后 request 派生 reviewer route�
 
 Managed skill 将记录由 Host 派生的 `agent` 或 `user` owner，并与 operator 控制的 autonomous-management opt-in 分离。只有具有强 admitted evidence、未 pinned 的 agent-owned revision 可以进入已授权 auto-promotion 路径。Rollout 将区分 shadow、conservative draft 与 conservative auto。Production 和 evaluation 调用同一个纯 promotion policy 与同一个 private activation transaction。Host派生的background activation identifier绑定actor、attempt和exact candidate，其immutable lineage与current pointer为replay同笔提交。Evaluation 必须同时提供 domain-separated 的单 case permit 与绑定 disposable root、不可序列化的进程内 authority；二者一起只替代评测正在决定是否签发的 authorization。Production service 不接受任何一项 eval input。
 
-Conservative live 与 historical review 将在派生 authorization scope 或 cursor lane 前选择一个 load-time validated named execution profile。Historical request route 仍以 event coordinate 与 digest 作为 source provenance，但不选择 reviewer、不进入 lane identity，也不增加 evaluation scope 数量。继承 live task route 只保留为 shadow-only 实验。
+Conservative live 与 historical review 将在派生 authorization scope 或 cursor lane 前选择一个 load-time validated named execution profile。Historical request route 仍以 event coordinate 与 digest 标注来源，但不选择 reviewer、不进入 lane identity，也不增加 evaluation scope 数量。继承 live task route 只保留为 shadow-only 实验。
 
 Planner 将接收有界 skill-learning context，其中包含 exact managed revision、support-file manifest、ownership state、loaded skill、相关 umbrella candidate 与符合条件的 hidden draft。它只能 patch context 中包含的 base。新 skill 面向 class-level trigger；窄的 session-specific material 优先进入 support file。
 
@@ -48,7 +48,7 @@ Exact same-invocation recovery 命名为 `retry-recovered`。Changed-invocation 
 
 **要求 evaluation 提供已经签发的 production authorization。** Authorization 是 evaluation 的输出，因此会形成循环。只有在同时存在 root-bound process authority，且每项 candidate-specific production check 与 activation transaction 保持相同时，独立 evaluation permit 才可接受。
 
-**让 historical review 使用每个 source Session 的旧 provider 与 model。** 原 route 是有用的 provenance，但把它与 reviewer 绑定，会让 retired provider 与历史 route 多样性决定学习可用性和 evaluation 成本。
+**让 historical review 使用每个 source Session 的旧 provider 与 model。** 原 route 是有用的来源上下文，但把它与 reviewer 绑定，会让 retired provider 与历史 route 多样性决定学习可用性和 evaluation 成本。
 
 **复制 Hermes 的 full-library consolidation loop。** 使用直接 filesystem write 的无界 model pass 无法提供 exact source baseline、destination-first settlement、crash replay 或 partial absorption 的 durable explanation。
 
@@ -60,14 +60,14 @@ Exact same-invocation recovery 命名为 `retry-recovered`。Changed-invocation 
 
 - Authorized auto scope 可通过 evaluation 所执行的相同 policy 与 activation path 让符合条件的 agent-owned revision 可见；activation重放幂等，user-owned、pinned、弱证据、unresolved 或 stale-base revision 不能 auto-promote。
 - Retained Session 在 source provider 不可用后仍可由 authorized named reviewer profile 学习，source-route 变化不创建 reviewer lane 或 evaluation scope。
-- Destination exact revision active 前 consolidation 不能 archive source，每个 archived source 都可按 exact absorption provenance restore。
+- Destination exact revision active 前 consolidation 不能 archive source，每个 archived source 都可按 exact absorption record restore。
 - Exact retry 与 changed-method episode 保持不同；单个 repair episode 永不发布 visible memory 或 auto-activate skill。
 - Cross-Session repair support 从 distinct finalized source Session 与 exact human repair operations 派生，并可在不改变 promotion decision 的前提下重建。
 - P5 分开报告 proposal-only benefit 与 production-reachable autonomous skill effect。
 
 ## Risks
 
-Auto-promotion 接受有界的剩余语义错误风险，因为 Host check 无法证明 model-authored instruction 在所有情形都正确。强 evidence class、exact ownership、conservative rollout、quality evaluation、provenance、correction、rejection、pinning、archival 与 restore 会降低并限制风险，但不能消除风险。
+Auto-promotion 接受有界的剩余语义错误风险，因为 Host check 无法证明 model-authored instruction 在所有情形都正确。强 evidence class、exact ownership、conservative rollout、quality evaluation、source attribution、correction、rejection、pinning、archival 与 restore 会降低并限制风险，但不能消除风险。
 
 Exact-digest repair corroboration 会漏掉措辞不同但语义等价的 lesson。首版接受该 false-negative 偏向，不让 semantic clustering 成为 publication authority。
 

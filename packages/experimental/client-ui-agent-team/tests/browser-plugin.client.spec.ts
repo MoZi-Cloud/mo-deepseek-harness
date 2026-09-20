@@ -5,6 +5,7 @@ import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import { SlotRegistry } from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type { TeamMemberView as TeamRosterMember, TeamTaskId } from '@deepseek-ai/dsh-experimental-agent-team/client'
 import type {} from '@deepseek-ai/dsh-experimental-agent-team/remote'
+import { RemoteError } from '@deepseek-ai/dsh-client-test-runtime'
 import type { TypertRemoteContribution } from '@deepseek-ai/dsh-typert-protocol'
 import { TeamAction, type TeamActionInjected } from '../src/client/TeamAction.tsx'
 import { inject, mountAgentTeamUi } from '../src/client/mount.ts'
@@ -51,7 +52,7 @@ async function bench(options: {
   const remote = new RemoteService(ctx)
   const failure = {
     ok: false as const,
-    error: { code: 'internal', message: 'offline', details: {} },
+    error: new RemoteError('gateway/internal', 'offline', {}),
   }
   const view = {
     members: [{
@@ -84,9 +85,8 @@ async function bench(options: {
     },
   })
   const navigation: unknown[] = []
-  let current = options.addressed === true ? CHILD : SESSION
+  let mainSessionId = options.addressed === true ? CHILD : SESSION
   ctx.provide('sessions', {
-    list: { getSnapshot: () => ({ current }) },
     binding: (id: SessionId) => options.addressed === true && id === CHILD
       ? { session: { getSnapshot: () => ({
         subagent: {
@@ -102,8 +102,17 @@ async function bench(options: {
       navigation.push(['refresh', id])
       return options.refreshGate ?? Promise.resolve()
     },
-    openSubagent: (address: unknown) => { navigation.push(['open', address]) },
+    retainInfo: (id: SessionId) => ({
+      getSnapshot: () => ({
+        referenceCount: id === mainSessionId ? 1 : 0,
+        retainedBy: id === mainSessionId ? { mainView: 1 } : {},
+      }),
+      subscribe: () => () => {},
+    }),
   })
+  ctx.provide('uiWorkspace', {
+    openSession: (target: unknown) => { navigation.push(['open', target]) },
+  } as never)
   ctx.provide('conversation', {})
   ctx.provide('locale', new LocaleRuntime(ctx))
   await ctx.plugin(SlotRegistry).await()
@@ -136,14 +145,14 @@ async function bench(options: {
     remote,
     entry,
     collapseHeader,
-    select: (sessionId: SessionId) => { current = sessionId },
+    select: (sessionId: SessionId) => { mainSessionId = sessionId },
   }
 }
 
 describe('ui-team browser plugin', () => {
   it('registers one disposable header action with RPC-backed task operations', async () => {
     const b = await bench()
-    expect(inject).toEqual(['sessions', 'remote', 'slots', 'locale'])
+    expect(inject).toEqual(['sessions', 'uiWorkspace', 'remote', 'slots', 'locale'])
     expect(b.entry()).toMatchObject({
       options: { id: 'agent-team', order: 20 },
       locale: 'agent-team',
@@ -204,18 +213,18 @@ describe('ui-team browser plugin', () => {
   it('returns Remote carrier failures unchanged', async () => {
     const view = await bench({ remoteFailure: 'view' })
     const viewActions = (view.entry()!.inject as unknown as () => TeamActionInjected)()
-    await expect(viewActions.load(SESSION)).resolves.toEqual({
+    await expect(viewActions.load(SESSION)).resolves.toMatchObject({
       ok: false,
-      error: { code: 'internal', message: 'offline', details: {} },
+      error: { code: 'gateway/internal', message: 'offline' },
     })
 
     const update = await bench({ remoteFailure: 'update' })
     const updateActions = (update.entry()!.inject as unknown as () => TeamActionInjected)()
     await expect(updateActions.updateTask(SESSION, {
       taskId: TASK_ID, expectedRevision: 1, action: 'delete',
-    })).resolves.toEqual({
+    })).resolves.toMatchObject({
       ok: false,
-      error: { code: 'internal', message: 'offline', details: {} },
+      error: { code: 'gateway/internal', message: 'offline' },
     })
   })
 

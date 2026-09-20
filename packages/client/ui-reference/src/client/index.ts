@@ -15,9 +15,9 @@
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
+import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
-import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import { relativeTime } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
   ClientSessionContext, InputTriggerCrumb, InputTriggerServiceContract, InputTriggerSource,
@@ -25,13 +25,13 @@ import type {
 import { formatFileMention } from '@deepseek-ai/dsh-file-reference/grammar'
 import type { FileReferenceCandidate } from '@deepseek-ai/dsh-file-reference/types'
 import type { SessionReferenceMentionCandidate } from '@deepseek-ai/dsh-session-reference/types'
-import { abbreviateHomePath } from '@deepseek-ai/dsh-util-workspace-path'
+import { abbreviateHomePath, fileAddressFor } from '@deepseek-ai/dsh-util-workspace-path'
 import { en, NS, zh, type ReferenceKey } from './locales.ts'
 
 /** Required services: the trigger registry, the Remote namespaces, and the copy. */
 export const inject = [
-  'inputTriggers', 'locale', 'connection', 'sessions', 'remote', 'remote.fileReferences',
-  'remote.sessionReferenceResolver',
+  'inputTriggers', 'locale', 'sessions', 'remote', 'remote.fileReferences',
+  'remote.sessionReferenceResolver', 'sidebarRight',
 ]
 
 /**
@@ -41,40 +41,46 @@ export const inject = [
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-reference: dictionaries')
   const t = ctx.locale.bind(NS)
-  const connection = ctx.get('connection') as ConnectionHandle
   const sessions = ctx.get('sessions') as ISessions
   const source: InputTriggerSource = {
     trigger: '@',
     name: 'reference',
     showGroupTitle: false,
     async candidates(session: ClientSessionContext, { query, quoted, drilled, signal }) {
-      const fileLookup = ctx.remote.fileReferences.list(session.sessionId, query, signal).then(
-        result => result.ok ? result.value : [],
-        () => [],
-      )
+      const fileLookup = ctx.remote.fileReferences.list(session.sessionId, query, signal)
+        .then(result => result.ok ? result.value : [])
       const sessionLookup = quoted === true
         ? Promise.resolve([] as SessionReferenceMentionCandidate[])
-        : ctx.remote.sessionReferenceResolver.candidates(session.sessionId, query, signal).then(
-          result => result.ok ? result.value : [],
-          () => [],
-        )
+        : ctx.remote.sessionReferenceResolver.candidates(session.sessionId, query, signal)
+          .then(result => result.ok ? result.value : [])
       const [fileItems, sessionItems] = await Promise.all([fileLookup, sessionLookup])
       if (signal.aborted) return []
       // The header already names the directory being listed; rows repeat it only
       // when there is no header to carry it.
       const withLocation = crumbsFor(query, quoted === true, drilled, t) === undefined
       const now = Date.now()
-      const home = connection.generation.getSnapshot()?.host.home
+      const home = ctx.remote.$host.home
       const listed = sessions.list.getSnapshot().byId
+      const sessionRows = sessionItems.map((candidate) => {
+        const summary = listed[candidate.sessionId]
+        const child = summary?.origin === 'subagent' && summary.parentId === session.sessionId
+        return {
+          child,
+          row: sessionCandidate(
+            candidate,
+            candidate.displayTitle ?? candidate.label,
+            summary?.updatedAt ?? candidate.createdAt,
+            now,
+            home,
+            t(child ? 'section.subagents' : 'section.sessions'),
+            t,
+          ),
+        }
+      })
       return [
         ...fileItems.flatMap(candidate => fileCandidate(candidate, quoted === true, withLocation, t)),
-        ...sessionItems.map(candidate => sessionCandidate(
-          candidate,
-          listed[candidate.sessionId]?.updatedAt ?? candidate.createdAt,
-          now,
-          home,
-          t,
-        )),
+        ...sessionRows.filter(item => item.child).map(item => item.row),
+        ...sessionRows.filter(item => !item.child).map(item => item.row),
       ]
     },
     header(_session: ClientSessionContext, req) {
@@ -112,6 +118,13 @@ export function apply(ctx: ClientContext): void {
         }
       }
       return undefined
+    },
+    openReference(session, { ref, appearance }) {
+      if (appearance !== 'file') return false
+      const path = ref.startsWith('@"') ? ref.slice(2, -1) : ref.slice(1)
+      const cwd = sessions.list.getSnapshot().byId[session.sessionId]?.cwd
+      ctx.sidebarRight.openResource(fileAddressFor(session.sessionId, cwd, path))
+      return true
     },
     codec: {
       clipboardText: ref => ref,
@@ -208,9 +221,11 @@ function fileCandidate(
 
 function sessionCandidate(
   candidate: SessionReferenceMentionCandidate,
+  label: string,
   updatedAt: number,
   now: number,
   home: string | undefined,
+  section: string,
   t: Translate,
 ) {
   const { unit, n } = relativeTime(updatedAt, now)
@@ -222,14 +237,14 @@ function sessionCandidate(
     : candidate.cwd === undefined ? t('candidate.noCwd') : abbreviateHomePath(candidate.cwd, home)
   const value: ReferenceCandidateValue = {
     kind: 'session',
-    label: candidate.label,
+    label,
     mention: candidate.mention,
   }
   return {
-    name: candidate.label,
+    name: label,
     description: location === undefined ? age : `${location} · ${age}`,
     icon: 'session' as const,
-    section: t('section.sessions'),
+    section,
     value: JSON.stringify(value),
   }
 }

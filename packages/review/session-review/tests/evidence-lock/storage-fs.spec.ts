@@ -28,6 +28,7 @@ import type {
   FsWriteIntent, FsWriteOutcome,
 } from '@deepseek-ai/dsh-fs'
 import { LocalFileSystem } from '@deepseek-ai/dsh-fs-local'
+import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { SandboxedFileSystem } from '@deepseek-ai/dsh-fs-sandbox'
 import { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
 
@@ -177,6 +178,10 @@ class ProbeFileSystem extends FileSystem {
     return target.displayPath
   }
 
+  override async readByteRange(): Promise<Uint8Array> {
+    return new Uint8Array()
+  }
+
   override fileUrl(target: FsTarget): string {
     return `file://${target.displayPath}`
   }
@@ -300,6 +305,7 @@ interface SandboxedHarness {
 /** Mount the policy service and a sandboxed local filesystem over `workspace`. */
 async function sandboxedHarness(mode: SandboxMode, workspace: string): Promise<SandboxedHarness> {
   const ctx = new Context()
+  await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(SandboxPolicyService, { mode, workspaceRoot: workspace })
   const fiber = await ctx.plugin(SandboxedFileSystem, { cwd: workspace })
   return { ctx, fiber, fs: ctx.fs as SandboxedFileSystem }

@@ -25,6 +25,7 @@
 | P1 旧批B | memory 骨架/第一版纯函数已于 `00e6658986` 提交；branded OpId 已于 `16bd8323de` 提交 |
 | P1 批C | `f8547babfd` 已提交第一版 Service/Publisher；Service 部分保留，append-only/stale fail-open Publisher 待替换 |
 | P2–P5 | 未实现 |
+| 上游同步 | 2026-09-21 master 已并入 upstream 0.1.6-alpha.2；fork 测试/门禁已适配新 API（`snapshotEvents`、async `agentLoop.create`、`SessionProjectionRegistry` harness、写句柄持久化等），154/154 绿，typecheck 与 doc 门禁全过 |
 
 现有 memory 代码不是 RC5.5.5 D01–D14 的完成实现：`MemoryScope.user`还没有 `UserKey`，`HostMemoryOp`还不是 discriminated union，update/remove没有 `expectedEntryDigest`，没有 config最坏发布证明、共用 evaluator、`previewOps`或 direct-terminal Service路径。现有 `latestPublishedMemory`倒扫 log，Publisher只 append且失败保留旧 snapshot；它不满足 D15–D18。因此下一步仍是 P1-R1对齐批，不在旧 Publisher上继续补 assembly。
 

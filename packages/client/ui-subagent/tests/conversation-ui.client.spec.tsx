@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
-import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
+import { makeTranslate, RemoteError } from '@deepseek-ai/dsh-client-test-runtime'
 import type {
   SessionListState, SessionSummary, SubagentCatalogSnapshot,
 } from '@deepseek-ai/dsh-api-session-controller/client'
@@ -56,14 +56,14 @@ function props(
         title: '正在扫描项目文件',
         displayTitle: 'worker',
         running: true,
+        retainedBy: {},
         blank: false,
         updatedAt: Date.now(),
       },
     },
-    current: PARENT, phase: 'ready',
+    phase: 'ready',
     subagentsByParent: value === undefined ? nested : { [PARENT]: value, ...nested },
     jobsBySession: {},
-    currentAddress: undefined,
   } satisfies SessionListState
   function useSessions<T>(select: (snapshot: SessionListState) => T): T {
     return select(state)
@@ -72,6 +72,7 @@ function props(
     sessionId: PARENT,
     useSessions,
     openChild: vi.fn(),
+    openChildAside: vi.fn(),
     refresh: vi.fn(),
     setCatalogOpen: vi.fn(),
     lineageSessionId: PARENT,
@@ -85,6 +86,7 @@ function summary(id: SessionId, updatedAt: number): SessionSummary {
     id,
     displayTitle: id,
     running: false,
+    retainedBy: {},
     blank: false,
     updatedAt,
   }
@@ -163,6 +165,14 @@ describe('SubagentHeaderLineage', () => {
     expect(screen.queryByRole('button', { name: '展开 reviewer 的下级子代理' })).toBeNull()
     expect(screen.getByRole('treeitem', { name: /reviewer/ }).children).toHaveLength(2)
 
+    const sidebarButton = screen.getByRole('button', { name: '在侧边栏打开 worker' })
+    fireEvent.keyDown(sidebarButton, { key: 'Enter' })
+    fireEvent.click(sidebarButton)
+    expect(input.openChildAside).toHaveBeenCalledWith({
+      parentSessionId: PARENT, childSessionId: CHILD, mode: 'continuable',
+    })
+
+    hoverCatalog(trigger)
     fireEvent.click(screen.getByRole('treeitem', { name: /worker/ }))
     expect(input.openChild).toHaveBeenCalledWith({
       parentSessionId: PARENT, childSessionId: CHILD, mode: 'continuable',
@@ -576,7 +586,7 @@ describe('SubagentHeaderLineage', () => {
     const failed = props(catalog({
       entries: [],
       state: 'error',
-      error: { code: 'internal', message: 'index down', details: {} },
+      error: new RemoteError('gateway/internal', 'index down', {}),
     }))
     render(<SubagentHeaderLineage {...failed} />)
     hoverCatalog(screen.getByRole('button', { name: /0 个子代理/ }))

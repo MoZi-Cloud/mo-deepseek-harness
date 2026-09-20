@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-09-02-bounded-autonomous-skill-evolution.md
-2026-09-02-bounded-autonomous-skill-evolution.md: ccdc125afd5c346264de2b75addcf905a6ac634e
-2026-09-02-bounded-autonomous-skill-evolution.zh.md: 70cd19255d78c7b64632e7a86bea545427bc2478
+2026-09-02-bounded-autonomous-skill-evolution.md: 457a8f4c5ffb1b70c5a774e186c18032f6b31182
+2026-09-02-bounded-autonomous-skill-evolution.zh.md: 9acdcf59e4df3eb97addf634f84a07415018619b

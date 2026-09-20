@@ -65,6 +65,12 @@
 - Background activation OpId由Host从actor/attempt/exact candidate稳定派生，不含可重签的artifact digest；成功activation把该id与immutable lineage/current pointer同笔CAS。恢复先做exact lineage duplicate查找，同id不同内容fail-loud，避免ledger crash后重复激活或把新授权误当成新操作。
 - P1函数拓扑和当前R1接手点不变；P2扩为D01–D17，P3扩为E01+D01–D24，P4扩为D01–D20，P5仍为D01–D16。
 
+### 上游同步 — 2026-09-21：master 已并入 deepseek-ai/deepseek-harness upstream/master
+
+- 合并基 `cd5ef81481`（0.1.2-alpha.1）→ upstream `ddefc45fbc`（0.1.6-alpha.2），上游侧 18,044 个提交；fork 侧 40 个提交全部保留。10 个冲突文件全部解决：`tsconfig.base.json`（上游已删 cordis-host-runner/mcp-client/session-reference/tool-result-pruner 的 `/invariant` paths，保留 fork 三个新包映射）、`pnpm-lock.yaml`（取上游后 `pnpm install` 重新登记 memory/session-review/content-scan）、两份 doc 注册脚本（重放 fork 行并采用上游新 brand 文案）、六份生成 catalog（取上游后重跑 `gen-config-catalog`/`gen-doc-graphs`，fork 包作为 library 与 `agent/pre-step` 监听者自动登记，zh 侧手动带上后 `--write` 重录）。
+- 上游 API 漂移已适配到 fork 代码与 P0 evidence-lock 测试：`session.events` → `session.snapshotEvents()`、`agentLoop.create` 变 async、harness 必须先挂 `SessionProjectionRegistry`、`Inbox` 由类变接口（改用 unsupported-inbox 桩）、persistence 改为显式 `sessionPersistence.create(header)` 写句柄 + `open(id,'read')` 读取、replace surfaceOp 字段名 `start/end` → `startSeq/endSeq`（且需要 `SessionSeq` brand）、assistant/message 事件数据必填 `stream: []`、`childSessionMeta` 第三参 `isSeeded` 变 boolean、`SessionHeader.isSeeded` 必填、`requestHeader` 不再携带 system（system prompt 现为 `system/message` surface node）。154/154 fork tests 全绿，typecheck 全过（先 `pnpm run clean` 清掉 8/29 的陈旧 `lib/` 残留）。
+- 上游新门禁的 fork 侧处置：`verify-repository-references`/`verify-concrete-terms` 的 `excludedPrefixes` 增加 `docs/mozi-fork/`（fork 内部过程记录必须保留字面 commit hash）；proposed 双语笔记按新规改写 provenance 措辞；`doc-budgets.manifest.json` 的 packages/README.md ceiling 994 → 1010（fork 新增 memory/review 两个包组行，PR 即本合并）。native flock 二进制需 `pnpm run build:native-system`。
+- 接手位置不变：仍从 §4.1 P1-R1 开始；批C 的 Publisher 仍是待替换实现。
 ## 4. 当前精确接手位置
 
 ### 4.1 P1-R1：RC5.5.5 类型、domain 与纯函数对齐（未开始，批C 未触碰）
@@ -110,7 +116,7 @@ P0 的 T01–T68 保留原已测事实，但 test-tree reference不是生产实�
 | storage domain/table/RMW/version errors | `packages/storage/storage-domain/src/spec.ts`；P0 T07/T20/T24/T44 |
 | Service 唯一 opener/effect disposal | `packages/session/session-projection-cache/src/index.ts`；`vendor/cordis/src/service.ts` |
 | root/cold session 枚举与 projection | `packages/session-query/session-query/src/index.ts` |
-| cold Agent resume 和 projected preset mount | `packages/core/agent/src/index.ts`；`packages/preset/agent-preset/src/index.ts` |
+| cold Agent resume 和 projected preset mount | `packages/core/agent/src/index.ts`；`packages/preset/agent-presets/src/index.ts` |
 | 历史 request provider/model route | `foldRequestHeader` in `@deepseek-ai/dsh-session` |
 | fresh subagent、structured output scoped tool 与 capabilities | `packages/subagent/subagent/src/index.ts`；`packages/subagent/subagent-in-process-driver/src/structured.ts`；spawn provider |
 | durable CommandId / ToolCallId | command/session event types；`ToolRunContext` |

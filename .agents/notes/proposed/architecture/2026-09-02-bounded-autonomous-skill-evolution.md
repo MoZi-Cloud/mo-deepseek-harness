@@ -16,7 +16,7 @@ Usage-based lifecycle maintenance does not prevent one-session skills from fragm
 
 Managed skills will record a Host-derived `agent` or `user` owner separately from an operator-controlled autonomous-management opt-in. Only unpinned agent-owned revisions with strong admitted evidence may use an authorized auto-promotion path. Rollout will distinguish shadow, conservative draft, and conservative auto levels. Production and evaluation will call one pure promotion policy and one private activation transaction. A Host-derived background activation identifier will bind the actor, attempt, and exact candidate, while its immutable lineage and current pointer will commit together for replay. Evaluation will require both a domain-separated one-case permit and a non-serializable process-local authority bound to its disposable root; together they replace only the authorization that the evaluation is deciding whether to issue. Production services will accept neither evaluation input.
 
-Conservative live and historical reviews will select a load-time validated named execution profile before deriving the authorization scope or cursor lane. Historical request routes will remain source provenance by event coordinate and digest, but will not select the reviewer, enter lane identity, or multiply evaluation scopes. Inheriting a live task route will remain a shadow-only experiment.
+Conservative live and historical reviews will select a load-time validated named execution profile before deriving the authorization scope or cursor lane. Historical request routes will remain source-attributed by event coordinate and digest, but will not select the reviewer, enter lane identity, or multiply evaluation scopes. Inheriting a live task route will remain a shadow-only experiment.
 
 The planner will receive a bounded skill-learning context containing exact managed revisions, support-file manifests, ownership state, loaded skills, related umbrella candidates, and eligible hidden drafts. It may patch only a base included in that context. New skills will target a class-level trigger; narrow session-specific material will prefer support files.
 
@@ -48,7 +48,7 @@ The [replay-authoritative publication and execution proposal](2026-09-02-replay-
 
 **Require evaluation to present an already-issued production authorization.** The authorization is the output of the evaluation, so this creates a cycle. A separate evaluation permit is acceptable only with a root-bound process authority and when every candidate-specific production check and the activation transaction remain identical.
 
-**Run historical review on each source Session's old provider and model.** The original route is useful provenance, but coupling it to the reviewer makes retired providers and historical route diversity determine learning availability and evaluation cost.
+**Run historical review on each source Session's old provider and model.** The original route is useful origin context, but coupling it to the reviewer makes retired providers and historical route diversity determine learning availability and evaluation cost.
 
 **Copy Hermes' full-library consolidation loop.** An unbounded model pass with direct filesystem writes cannot provide exact source baselines, destination-first settlement, crash replay, or a durable explanation of partial absorption.
 
@@ -60,14 +60,14 @@ The [replay-authoritative publication and execution proposal](2026-09-02-replay-
 
 - An authorized auto scope can make an eligible agent-owned revision visible through the same policy and activation path exercised by evaluation; activation replay is idempotent, and user-owned, pinned, weak-evidence, unresolved, or stale-base revisions cannot auto-promote.
 - A retained Session remains learnable through an authorized named reviewer profile after its source provider is unavailable, and source-route changes do not create reviewer lanes or evaluation scopes.
-- Consolidation cannot archive a source before the exact destination revision is active, and every archived source remains restorable with exact absorption provenance.
+- Consolidation cannot archive a source before the exact destination revision is active, and every archived source remains restorable with an exact absorption record.
 - Exact retries and changed-method episodes are distinct; one repair episode never publishes visible memory or auto-activates a skill.
 - Cross-Session repair support is derived from distinct finalized source Sessions and exact human repair operations, and can be rebuilt without changing promotion decisions.
 - P5 reports proposal-only benefit separately from production-reachable autonomous skill effect.
 
 ## Risks
 
-Auto-promotion accepts a bounded residual semantic-error risk because Host checks cannot prove that model-authored instructions are universally correct. Strong evidence classes, exact ownership, conservative rollout, quality evaluation, provenance, correction, rejection, pinning, archival, and restore reduce and contain that risk but do not eliminate it.
+Auto-promotion accepts a bounded residual semantic-error risk because Host checks cannot prove that model-authored instructions are universally correct. Strong evidence classes, exact ownership, conservative rollout, quality evaluation, source attribution, correction, rejection, pinning, archival, and restore reduce and contain that risk but do not eliminate it.
 
 Exact-digest repair corroboration will miss semantically equivalent lessons phrased differently. The first version accepts this false-negative bias instead of making semantic clustering an authority for publication.
 

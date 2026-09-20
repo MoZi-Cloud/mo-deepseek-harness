@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-09-02-replay-authoritative-self-evolution.md
-2026-09-02-replay-authoritative-self-evolution.md: 47ac1584ba47e59d34dffc8cc3cb5d456ee71ef5
-2026-09-02-replay-authoritative-self-evolution.zh.md: 31bd90254c863774777edfe09e4266b6948638de
+2026-09-02-replay-authoritative-self-evolution.md: ee21ed9059882290368d8802bb08bf5fb41c66fa
+2026-09-02-replay-authoritative-self-evolution.zh.md: c109081d3bddea50a1166d2622e5bf1a2bc9e14e

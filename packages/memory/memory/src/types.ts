@@ -50,7 +50,7 @@ export interface MemoryEntry {
   readonly content: string
   /** Free-form classifier the review planner may attach. */
   readonly kind?: string
-  /** Provenance note (where in the session the fact came from). */
+  /** Source note (where in the session the fact came from). */
   readonly evidence?: string
   /** `now` of the creating op. */
   readonly createdAt: number

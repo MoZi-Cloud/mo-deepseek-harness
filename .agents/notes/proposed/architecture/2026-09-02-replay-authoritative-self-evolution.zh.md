@@ -60,7 +60,7 @@ Physical orphan reclamation 将继续留在核心 managed-skill authoring Phase 
 
 ## Risks
 
-Generic surface-intent carrier 扩大了 Agent Loop API，并要求每个重写已准入 message 的 listener 在同一 decision 中保留、替换或删除相关 intent。缺失映射、孤立映射，或无效/重复 message identity 必须在 model request 前失败，而不是静默弱化 replacement provenance。
+Generic surface-intent carrier 扩大了 Agent Loop API，并要求每个重写已准入 message 的 listener 在同一 decision 中保留、替换或删除相关 intent。缺失映射、孤立映射，或无效/重复 message identity 必须在 model request 前失败，而不是静默弱化 replacement accountability。
 
 一些 remote planner provider 可能无法 attest 实际 request envelope 或暴露稳定 execution-profile digest。这些 provider 仍可用于 shadow evaluation，但不能执行 conservative durable learning。
 

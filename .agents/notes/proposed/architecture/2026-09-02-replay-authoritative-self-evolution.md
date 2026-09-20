@@ -60,7 +60,7 @@ The [RC5.5.4 disposition](../../../../docs/mozi-fork/RC5.5.4-第十轮评审核�
 
 ## Risks
 
-The generic surface-intent carrier broadens Agent Loop API and requires every listener that rewrites admitted messages to preserve, replace, or remove the associated intents in the same decision. A missing mapping, orphan mapping, or invalid or duplicate message identity must fail before a model request rather than silently weakening replacement provenance.
+The generic surface-intent carrier broadens Agent Loop API and requires every listener that rewrites admitted messages to preserve, replace, or remove the associated intents in the same decision. A missing mapping, orphan mapping, or invalid or duplicate message identity must fail before a model request rather than silently weakening replacement accountability.
 
 Some remote planner providers may not be able to attest the actual request envelope or expose a stable execution-profile digest. Those providers remain useful for shadow evaluation but cannot perform conservative durable learning.
 

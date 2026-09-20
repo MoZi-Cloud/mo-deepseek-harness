@@ -17,7 +17,9 @@ import LlmRuntime, { createUserMessage, type ContentBlock, type Message } from '
 import SessionStore, {
   foldRequestHeader,
   KNOWN_SESSION_EVENT_TYPES,
+  SESSION_FORMAT_VERSION,
   Session,
+  SessionSeq,
   SessionId,
   type SessionEvent,
 } from '@deepseek-ai/dsh-session'
@@ -26,6 +28,7 @@ import ToolRuntime, { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import AgentRegistry, { type Agent, type PreStepDecision } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import InvariantRegistry from '@deepseek-ai/dsh-invariants'
+import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import * as AgentLoopInvariant from '@deepseek-ai/dsh-agent-loop/invariant'
 import { finalAssistantOutput } from '@deepseek-ai/dsh-subagent'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
@@ -49,7 +52,8 @@ async function harness(adapter: MockAdapter, invariants = false): Promise<Contex
   const ctx = new Context()
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(SessionStore)
-  await ctx.plugin(SystemPrompt, { persona: '' })
+  await ctx.plugin(SessionProjectionRegistry)
+  await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(AgentRegistry)
   if (invariants) {
@@ -77,7 +81,7 @@ function send(agent: Agent, text: string): void {
 }
 
 function eventsOf(agent: Agent): SessionEvent[] {
-  return [...agent.session.events]
+  return agent.session.snapshotEvents().slice()
 }
 
 function messageTexts(messages: readonly Message[]): string[] {
@@ -96,13 +100,13 @@ describe('T13 request-header-bytestable', () => {
   it('folds the durable log to a byte-identical header across a replayed seed', async () => {
     const adapter = new MockAdapter([textResponse('header reply')])
     const ctx = await harness(adapter, true)
-    const agent = ctx.agentLoop.create(SessionId('evlock-header'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('evlock-header'), { provider: 'mock', model: 'mock' })
     send(agent, 'establish the header')
     await waitForIdle(ctx, agent)
 
     const live = agent.session.requestHeader()
-    if (live === undefined || live.system === undefined) throw new Error('expected a folded request header with a system prompt')
-    expect(live.system.length).toBeGreaterThan(0)
+    if (live === undefined) throw new Error('expected a folded request header')
+    expect(live.config.model).toBe('mock')
     // The incremental fold equals a fold over the whole durable log, byte for byte.
     expect(JSON.stringify(foldRequestHeader(eventsOf(agent)))).toBe(JSON.stringify(live))
 
@@ -126,15 +130,17 @@ describe('T14 fail-closed-vocabulary', () => {
     await ctx.plugin(SessionStore)
     await ctx.plugin(JsonlSessionPersistence, { root, compression: 'none' })
     const session = ctx.sessions.create(SessionId('evlock-vocab-1'))
+    const handle = await ctx.sessionPersistence.create(session.header)
     session.append('turn/start', { turn: 1 })
     session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
     await ctx.sessions.flush(session)
+    await handle.close()
     await ctx.fiber.dispose()
 
     const file = logPath(root, session.header.cwd, session.header.id, 'none')
     const raw = await readFile(file, 'utf8')
     const lines = raw.split('\n').filter(line => line.length > 0)
-    expect(JSON.parse(lines[0] as string)).toMatchObject({ id: 'evlock-vocab-1', version: 0 })
+    expect(JSON.parse(lines[0] as string)).toMatchObject({ id: 'evlock-vocab-1', version: SESSION_FORMAT_VERSION })
     const last = JSON.parse(lines.at(-1) as string) as { seq: number }
     const unknownLine = JSON.stringify({ ...last, seq: last.seq + 1, type: 'future/event', data: {} })
     await appendFile(file, (raw.endsWith('\n') ? '' : '\n') + unknownLine + '\n')
@@ -143,13 +149,13 @@ describe('T14 fail-closed-vocabulary', () => {
     const reload = new Context()
     await reload.plugin(SessionStore)
     await reload.plugin(JsonlSessionPersistence, { root, compression: 'none' })
-    await expect(reload.sessionPersistence.load(SessionId('evlock-vocab-1')))
+    await expect(reload.sessionPersistence.open(SessionId('evlock-vocab-1'), 'read'))
       .rejects.toThrow(/refusing to interpret/)
   })
 })
 
 describe('T17 compaction-surface-vs-seq', () => {
-  it('replaces the surface without touching log seqs, and requires full replace provenance', () => {
+  it('replaces the surface without touching log seqs, and requires a full source citation', () => {
     const session = Session.create(SessionId('evlock-compaction'))
     const seqs = ['one', 'two', 'three'].map(text => session.append('user/message', createUserMessage({
       content: [{ type: 'text', text }],
@@ -166,7 +172,7 @@ describe('T17 compaction-surface-vs-seq', () => {
     const summary = session.append('compaction/summary', {
       compactionId,
       summary: [{ type: 'text', text: 'summary of three' }],
-      shadowedRange: { start: firstShadowed, end: lastShadowed },
+      shadowedRange: { start: SessionSeq(firstShadowed), end: SessionSeq(lastShadowed) },
       shadowedSeqs: seqs,
       shadowedTokenCount: 0,
       provider: 'stub',
@@ -176,13 +182,13 @@ describe('T17 compaction-surface-vs-seq', () => {
       content: [{ type: 'text', text: 'checkpoint' }],
       source: compactCheckpointSource(compactionId),
     }), {
-      surfaceOp: { op: 'replace', start: firstShadowed, end: lastShadowed },
+      surfaceOp: { op: 'replace', startSeq: firstShadowed, endSeq: lastShadowed },
       sourceEventSeqs: [start.seq, summary.seq, firstShadowed, middleShadowed, lastShadowed],
     })
 
     // Append-only log: every pre-compaction event keeps its seq and payload.
-    expect(session.events).toHaveLength(before + 3)
-    for (const [index, event] of session.events.slice(0, before).entries()) {
+    expect(session.snapshotEvents()).toHaveLength(before + 3)
+    for (const [index, event] of session.snapshotEvents().slice(0, before).entries()) {
       expect(event.seq).toBe(seqsOf(session)[index])
       expect(event.type).toBe(typesOf(session)[index])
     }
@@ -191,42 +197,42 @@ describe('T17 compaction-surface-vs-seq', () => {
     expect(surface).toHaveLength(1)
     expect(messageTexts(surface)).toEqual(['checkpoint'])
     // The replacement cites every shadowed surface node.
-    const replacement = session.events.at(-1) as SessionEvent & { sourceEventSeqs?: number[] }
+    const replacement = session.snapshotEvents().at(-1) as SessionEvent & { sourceEventSeqs?: number[] }
     for (const seq of [firstShadowed, middleShadowed, lastShadowed]) {
       expect(replacement.sourceEventSeqs).toContain(seq)
     }
 
-    // A replace without full provenance is rejected up front: the list is
-    // non-empty (user/message replacements always cite provenance) but must
+    // A replace without a full source citation is rejected up front: the list is
+    // non-empty (user/message replacements always cite their sources) but must
     // also cover EVERY shadowed surface node.
-    const survivor = (session.events.at(-1) as { seq: number }).seq
+    const survivor = (session.snapshotEvents().at(-1) as { seq: SessionSeq }).seq
     expect(() => session.append('user/message', createUserMessage({
-      content: [{ type: 'text', text: 'unprovenanced' }],
-      source: compactCheckpointSource(CompactionId('evlock-unprovenanced')),
+      content: [{ type: 'text', text: 'uncited' }],
+      source: compactCheckpointSource(CompactionId('evlock-uncited')),
     }), {
-      surfaceOp: { op: 'replace', start: survivor, end: survivor },
+      surfaceOp: { op: 'replace', startSeq: survivor, endSeq: survivor },
       sourceEventSeqs: [firstShadowed],
     })).toThrow(/must include every shadowed surface node/)
   })
 })
 
 function eventsOfLength(session: Session): number {
-  return session.events.length
+  return session.snapshotEvents().length
 }
 
 function seqsOf(session: Session): number[] {
-  return session.events.map(event => event.seq)
+  return session.snapshotEvents().map(event => event.seq)
 }
 
 function typesOf(session: Session): string[] {
-  return session.events.map(event => event.type)
+  return session.snapshotEvents().map(event => event.type)
 }
 
 describe('T21 pre-step-waterfall-order', () => {
   it('a listener can delay the step and inject context before the model request', async () => {
     const adapter = new MockAdapter([textResponse('delayed reply')])
     const ctx = await harness(adapter)
-    const agent = ctx.agentLoop.create(SessionId('evlock-pre-step-delay'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('evlock-pre-step-delay'), { provider: 'mock', model: 'mock' })
     const entered = Promise.withResolvers<undefined>()
     const gate = Promise.withResolvers<undefined>()
     ctx.on('agent/pre-step', async (_payload, next): Promise<PreStepDecision> => {
@@ -258,7 +264,7 @@ describe('T21 pre-step-waterfall-order', () => {
   it('a listener can reject the step: the turn ends blocked with no model call', async () => {
     const adapter = new MockAdapter([textResponse('never asked')])
     const ctx = await harness(adapter)
-    const agent = ctx.agentLoop.create(SessionId('evlock-pre-step-reject'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('evlock-pre-step-reject'), { provider: 'mock', model: 'mock' })
     ctx.on('agent/pre-step', async (_payload, next): Promise<PreStepDecision> => {
       await next()
       return { kind: 'reject' }
@@ -278,11 +284,11 @@ describe('T22 session-event-observe', () => {
   it('delivers every committed event with a monotonic seq, turn/end last', async () => {
     const adapter = new MockAdapter([textResponse('observed reply')])
     const ctx = await harness(adapter)
-    const agent = ctx.agentLoop.create(SessionId('evlock-observe'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('evlock-observe'), { provider: 'mock', model: 'mock' })
     const seen: SessionEvent[] = []
     let committedAtDelivery = true
     ctx.on('session/event', (session, event) => {
-      if (!session.events.some(committed => committed.seq === event.seq)) committedAtDelivery = false
+      if (!session.snapshotEvents().some(committed => committed.seq === event.seq)) committedAtDelivery = false
       seen.push({ ...event })
     })
 
@@ -312,7 +318,7 @@ describe('T23 run-maintenance-claim', () => {
   it('throws while a turn owns the agent, and re-enters cleanly once idle', async () => {
     const adapter = new MockAdapter(['hang'])
     const ctx = await harness(adapter)
-    const agent = ctx.agentLoop.create(SessionId('evlock-maintenance'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('evlock-maintenance'), { provider: 'mock', model: 'mock' })
     send(agent, 'hold the agent busy')
     await new Promise(resolve => setTimeout(resolve, 20))
 
@@ -338,7 +344,7 @@ describe('T30 blocking-order-publisher-sees-commit', () => {
       parameters: { text: { type: 'string', required: true } },
       execute: async args => [{ type: 'text', text: `noted:${args.text}` }],
     }))
-    const agent = ctx.agentLoop.create(SessionId('evlock-publisher'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('evlock-publisher'), { provider: 'mock', model: 'mock' })
 
     const publisherViews: string[][] = []
     ctx.on('session/event', (session, event) => {
@@ -371,7 +377,7 @@ describe('T32 assistant-final-derivation', () => {
       parameters: { text: { type: 'string', required: true } },
       execute: async args => [{ type: 'text', text: `echo:${args.text}` }],
     }))
-    const agent = ctx.agentLoop.create(SessionId('evlock-final'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('evlock-final'), { provider: 'mock', model: 'mock' })
     send(agent, 'two steps')
     await waitForIdle(ctx, agent)
 

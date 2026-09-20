@@ -219,13 +219,13 @@ describe('resolveMemoryScope', () => {
 
 describe('latestPublishedMemory', () => {
   it('absent-undefined', () => {
-    const fakeSession = { events: [] } as unknown as Parameters<typeof latestPublishedMemory>[0]
+    const fakeSession = { snapshotEvents: () => [] } as unknown as Parameters<typeof latestPublishedMemory>[0]
     expect(latestPublishedMemory(fakeSession)).toBeUndefined()
   })
 
   it('ignores-non-memory', () => {
     const fakeSession = {
-      events: [
+      snapshotEvents: () => [
         { type: 'user/message', seq: 0, data: { source: { kind: 'plugin' } } },
       ],
     } as unknown as Parameters<typeof latestPublishedMemory>[0]
@@ -234,7 +234,7 @@ describe('latestPublishedMemory', () => {
 
   it('latest-prefers-highest-seq', () => {
     const fakeSession = {
-      events: [
+      snapshotEvents: () => [
         { type: 'user/message', seq: 0, data: { source: { kind: 'memory', digest: 'aaa', form: 'snapshot', sections: [], scopes: {} } } },
         { type: 'user/message', seq: 1, data: { source: { kind: 'memory', digest: 'bbb', form: 'snapshot', sections: [], scopes: {} } } },
       ],

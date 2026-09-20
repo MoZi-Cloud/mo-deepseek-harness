@@ -15,7 +15,7 @@ import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { type Agent } from '@deepseek-ai/dsh-agent'
-import { SessionId } from '@deepseek-ai/dsh-session'
+import { SessionId, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import InvariantRegistry from '@deepseek-ai/dsh-invariants'
@@ -118,7 +118,7 @@ async function spawnSetup(script: ConstructorParameters<typeof MockAdapter>[0]) 
   const root = await tempRoot('evlock-child-')
   await ctx.plugin(JsonlSessionPersistence, { root, compression: 'none' })
   ctx.llm.registerAdapter(['mock'], adapter)
-  const parent = ctx.agentLoop.create(SessionId('evlock-parent'), { provider: 'mock', model: 'mock' })
+  const parent = await ctx.agentLoop.create(SessionId('evlock-parent'), { provider: 'mock', model: 'mock' })
   return { ctx, parent, adapter, root }
 }
 
@@ -245,7 +245,7 @@ describe('T04 child-session-persistence', () => {
     const lines = (await readFile(file, 'utf8')).split('\n').filter(line => line.length > 0)
     expect(JSON.parse(lines[0] as string)).toMatchObject({
       id: run.id,
-      version: 0,
+      version: SESSION_FORMAT_VERSION,
       origin: 'subagent',
       parentSession: parent.session.header.id,
       delegationDepth: 1,
@@ -259,13 +259,13 @@ describe('T04 child-session-persistence', () => {
       session: { header: { id: SessionId('preset-parent') } },
       ctx: { get: (name: string) => name === 'agentPresets' ? { composedPreset: () => 'standard' } : undefined },
     } as unknown as Agent
-    expect(childSessionMeta(presetParent, 2, 0)).toMatchObject({
+    expect(childSessionMeta(presetParent, 2, false)).toMatchObject({
       origin: 'subagent',
       parentSession: SessionId('preset-parent'),
       delegationDepth: 2,
       agentPreset: 'standard',
     })
-    expect('agentPreset' in childSessionMeta(fakeParent(), 1, 0)).toBe(false)
+    expect('agentPreset' in childSessionMeta(fakeParent(), 1, false)).toBe(false)
   })
 })
 

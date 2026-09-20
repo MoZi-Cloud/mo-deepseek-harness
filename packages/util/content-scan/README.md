@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`dsh-content-scan` runs one anchored pattern set over a text and returns located findings, each carrying a severity of `caution` or `blocked`, an attack category, a 1-based line, and a capped excerpt. The write gate rejects memory content on `blocked` findings; the read-boundary gate re-scans at publication and renders flagged entries as placeholders — the two gates share this one scanner so a poisoned entry cannot enter the model context even when it bypassed the write. Scanning NFKC-normalizes first (full-width lookalikes match), detects invisible and bidirectional Unicode on the raw text, and caps input at 65,536 characters. It is a zero-dependency library; the corpus tests in this package pin both the detection set and the false-positive budget.
+`dsh-content-scan` runs one anchored pattern set over a text and returns findings, each carrying a `caution` or `blocked` severity, an attack category, a 1-based line, and a capped excerpt. The write gate rejects memory content on `blocked` findings; the read-boundary gate re-scans at publication and renders flagged entries as placeholders — one scanner, so a poisoned entry cannot reach model context even when it bypassed the write. Scanning NFKC-normalizes first (full-width lookalikes match), detects invisible and bidirectional Unicode on the raw text, and caps input at 65,536 characters. Corpus tests pin the detection set and the false-positive budget.
 
 ## Table of Contents
 

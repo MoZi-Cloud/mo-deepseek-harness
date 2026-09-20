@@ -17,7 +17,7 @@ import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
-import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
+import SessionStore, { SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 import { CompactionId } from '@deepseek-ai/dsh-compaction'
 import Storage from '@deepseek-ai/dsh-storage'
 import { defineDomain, domainTable, DomainFacility } from '@deepseek-ai/dsh-storage-domain'
@@ -108,12 +108,13 @@ async function sizedSession(ctx: Context, id: string, turns: number, userChars: 
         content: [{ type: 'text', text: `a${i}`.repeat(assistantChars) }],
         source: { provider: 'mock', model: 'mock' },
       }),
+      stream: [],
     }, { surfaceOp: 'append' })
     if (i === Math.floor(turns / 2)) {
       session.append('compaction/summary', {
         compactionId: CompactionId('evlock-view'),
         summary: [{ type: 'text', text: 'synthetic context' }],
-        shadowedRange: { start: 0, end: 0 },
+        shadowedRange: { start: SessionSeq(0), end: SessionSeq(0) },
         shadowedSeqs: [],
         shadowedTokenCount: 0,
         provider: 'stub',
@@ -121,7 +122,7 @@ async function sizedSession(ctx: Context, id: string, turns: number, userChars: 
       })
     }
   }
-  return session.events.map(event => ({
+  return session.snapshotEvents().map(event => ({
     seq: event.seq,
     type: event.type,
     text: event.type === 'user/message'

@@ -19,10 +19,11 @@ import { Context } from '@deepseek-ai/cordis'
 import { ToolCallId, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { agentEvents, Inbox } from '@deepseek-ai/dsh-agent'
+import { agentEvents } from '@deepseek-ai/dsh-agent'
 import { Session, SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import SessionStore from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import ToolRuntime, { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import SkillRegistry from '@deepseek-ai/dsh-skill'
@@ -127,7 +128,8 @@ async function loopHarness(adapter: MockAdapter): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(SessionStore)
-  await ctx.plugin(SystemPrompt, { persona: '' })
+  await ctx.plugin(SessionProjectionRegistry)
+  await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(AgentLoop, { agents: [] })
@@ -166,17 +168,17 @@ describe('T15 tool-result-durable-surface', () => {
       parameters: {},
       execute: async () => { throw new Error('evlock boom') },
     }))
-    const agent = ctx.agentLoop.create(SessionId('evlock-durable'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('evlock-durable'), { provider: 'mock', model: 'mock' })
     agent.followup(createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }))
     await waitForIdle(ctx, agent)
 
-    const calls = new Map(agent.session.events
+    const calls = new Map(agent.session.snapshotEvents()
       .filter((event): event is SessionEvent & { type: 'tool/call' } => event.type === 'tool/call')
       .map(event => [event.data.callId, event.data.name]))
     expect(calls.get(ToolCallId('c1'))).toBe('evlock-note')
     expect(calls.get(ToolCallId('c2'))).toBe('evlock-boom')
 
-    const durableResults = agent.session.events
+    const durableResults = agent.session.snapshotEvents()
       .filter((event): event is SessionEvent & { type: 'tool/result' } => event.type === 'tool/result')
     expect(durableResults).toHaveLength(2)
     for (const event of durableResults) {
@@ -210,6 +212,17 @@ async function skillHarness(home: string): Promise<Context> {
   return ctx
 }
 
+/** The catalog pre-step never touches the inbox; mutations reject loudly. */
+function unsupportedInbox(): Agent['inbox'] {
+  const rejectMutation = (): never => {
+    throw new Error('this test Agent does not support Inbox mutations')
+  }
+  return {
+    nextTurn: [], nextStep: [], clear: rejectMutation, append: rejectMutation,
+    prepend: rejectMutation, replace: rejectMutation, remove: rejectMutation, splice: rejectMutation,
+  }
+}
+
 function sessionAgent(name: string): Agent {
   const id = SessionId(name)
   const session = Session.create(id)
@@ -217,7 +230,7 @@ function sessionAgent(name: string): Agent {
     id,
     options: {},
     session,
-    inbox: new Inbox(session, { inserted: () => {}, discarded: () => {}, claimed: () => {} }),
+    inbox: unsupportedInbox(),
     status: 'running',
     ctx: new Context(),
     send: () => {},
@@ -231,7 +244,7 @@ function sessionAgent(name: string): Agent {
 }
 
 function catalogEvents(session: Session): SessionEvent[] {
-  return session.events.filter((event): event is SessionEvent & { type: 'user/message' } => event.type === 'user/message'
+  return session.snapshotEvents().filter((event): event is SessionEvent & { type: 'user/message' } => event.type === 'user/message'
     && event.data.source.kind === 'skill-catalog')
 }
 
