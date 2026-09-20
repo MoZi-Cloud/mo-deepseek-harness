@@ -6747,6 +6747,12 @@ importers:
         specifier: ^4.19.2
         version: 4.22.4
 
+  packages/experimental/observatory-protocol:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+
   packages/experimental/ptc-runtime-python:
     dependencies:
       '@deepseek-ai/schemastery':

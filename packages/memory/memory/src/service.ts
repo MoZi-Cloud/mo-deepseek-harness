@@ -254,6 +254,9 @@ export class MemoryService extends Service {
  * @returns the digest and seq of the latest memory snapshot, or `undefined`.
  */
 export function latestPublishedMemory(session: Session): { digest: string; seq: number } | undefined {
+  // Deferred migration: P1-D17 replaces this reverse scan with surface-based
+  // reads; no sanctioned synchronous replacement exists for a retained-log scan.
+  // oxlint-disable-next-line typescript/no-deprecated
   const events = session.snapshotEvents()
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index]

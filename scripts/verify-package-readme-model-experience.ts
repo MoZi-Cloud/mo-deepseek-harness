@@ -33,6 +33,7 @@ const NO_MODEL_EXPERIENCE_SECTION: Readonly<Record<string, string>> = {
   'packages/core/scope': 'The package is a model-agnostic registration and lifecycle primitive; model-facing consumers own any context selection.',
   'packages/review/session-review': 'The P0 skeleton registers no tools, prompts, or context; the review runtime adds its Model Experience when it owns model-visible behavior.',
   'packages/memory/memory': 'The contract layer (domain spec, pure folds) registers nothing model-facing; the Service/Publisher assembly writes its canonical blocks when it mounts later in the same phase.',
+  'packages/experimental/observatory-protocol': 'The package validates offline research documents; it registers nothing model-facing.',
   'packages/util/brand': 'The package only constructs plain string values and registers nothing model-facing.',
   'packages/util/home-paths': 'The package only resolves harness-owned host paths; model-facing consumers own any rendered use.',
   'packages/util/launch-environment': 'The package only resolves host environment values; model-facing consumers own any rendered use.',

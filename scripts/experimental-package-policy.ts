@@ -1,5 +1,8 @@
 /** Experimental packages excluded from public releases and npm baselines. */
-export const PRIVATE_EXPERIMENTAL_PACKAGE_DIRECTORIES: readonly string[] = []
+export const PRIVATE_EXPERIMENTAL_PACKAGE_DIRECTORIES: readonly string[] = [
+  // Fork-internal research asset; the Observatory protocol specs never publish.
+  'packages/experimental/observatory-protocol',
+]
 
 /**
  * Whether an experimental package publishes under the default-public policy.

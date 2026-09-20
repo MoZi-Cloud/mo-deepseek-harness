@@ -87,6 +87,7 @@ const PACKAGE_LIBRARIES: Readonly<Record<string, string>> = {
   'packages/typert/protocol': 'Compiler-independent protocol declarations.',
   'packages/util/atomic-write': 'Zero-dependency filesystem write utility.',
   'packages/util/content-scan': 'Zero-dependency threat-scan utility for self-evolution content gates.',
+  'packages/experimental/observatory-protocol': 'Research protocol spec library for the Observatory evidence pipeline.',
   'packages/util/brand': 'Stateless nominal-string and canonical-key constructors.',
   'packages/util/crypto': 'Zero-dependency identifier minting utility.',
   'packages/util/deque': 'Zero-dependency circular deque utility.',

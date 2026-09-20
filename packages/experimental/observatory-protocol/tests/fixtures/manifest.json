@@ -1,0 +1,201 @@
+{
+  "fixtures": [
+    {
+      "file": "positive/envelope-minimal-exploratory.json",
+      "target": "envelope",
+      "expect": {
+        "verdict": "accept",
+        "digest": "sha256:1853fe99fab0ddd359a283f033963997b03fade3bd9086e56440ebf629c33261"
+      }
+    },
+    {
+      "file": "positive/envelope-study-bound.json",
+      "target": "envelope",
+      "expect": {
+        "verdict": "accept",
+        "digest": "sha256:45939cbced815394d69b87cbfa00d9537866a3556540e3909f826d4dae140276"
+      }
+    },
+    {
+      "file": "positive/envelope-maximal.json",
+      "target": "envelope",
+      "expect": {
+        "verdict": "accept",
+        "digest": "sha256:ad9a742242f94309d4b450287c0c8bc51d84575343caf4723f08be2b46f2aa13"
+      }
+    },
+    {
+      "file": "positive/envelope-heartbeat.json",
+      "target": "envelope",
+      "expect": {
+        "verdict": "accept",
+        "digest": "sha256:68a3831fced26969d58213e28e798f893343a3f735bc11c94541850155e6e8ee"
+      }
+    },
+    {
+      "file": "positive/envelope-blob-ticket.json",
+      "target": "envelope",
+      "expect": {
+        "verdict": "accept",
+        "digest": "sha256:e4671469652f44d929e0c02086e88022688935c36abe82e77caa71941f0a1109"
+      }
+    },
+    {
+      "file": "positive/study-lock.json",
+      "target": "study-lock",
+      "expect": {
+        "verdict": "accept",
+        "digest": "sha256:73e61c858f46802db24c629cb3176d2c53029297c6183cbb9efdf544f84fb88d"
+      }
+    },
+    {
+      "file": "positive/capture-profile.json",
+      "target": "capture-profile",
+      "expect": {
+        "verdict": "accept",
+        "digest": "sha256:7da8ae39a02c817e83a6ce9ed5a1ed827193ae0d7dc29ebb6b244e718ae07353"
+      }
+    },
+    {
+      "file": "negative/envelope-duplicate-key.json",
+      "target": "envelope",
+      "expect": {
+        "verdict": "reject",
+        "codes": [
+          "duplicate_key"
+        ]
+      }
+    },
+    {
+      "file": "negative/envelope-non-canonical-number.json",
+      "target": "envelope",
+      "expect": {
+        "verdict": "reject",
+        "codes": [
+          "non_canonical_number"
+        ]
+      }
+    },
+    {
+      "file": "negative/envelope-trailing-content.json",
+      "target": "envelope",
+      "expect": {
+        "verdict": "reject",
+        "codes": [
+          "trailing_content"
+        ]
+      }
+    },
+    {
+      "file": "negative/envelope-unknown-field.json",
+      "target": "envelope",
+      "expect": {
+        "verdict": "reject",
+        "codes": [
+          "unknown_field"
+        ]
+      }
+    },
+    {
+      "file": "negative/envelope-missing-lock.json",
+      "target": "envelope",
+      "expect": {
+        "verdict": "reject",
+        "codes": [
+          "missing_field"
+        ]
+      }
+    },
+    {
+      "file": "negative/envelope-binding-conflict.json",
+      "target": "envelope",
+      "expect": {
+        "verdict": "reject",
+        "codes": [
+          "binding_conflict"
+        ]
+      }
+    },
+    {
+      "file": "negative/envelope-size-limit.json",
+      "target": "envelope",
+      "expect": {
+        "verdict": "reject",
+        "codes": [
+          "size_limit"
+        ]
+      }
+    },
+    {
+      "file": "negative/envelope-declared-size-mismatch.json",
+      "target": "envelope",
+      "expect": {
+        "verdict": "reject",
+        "codes": [
+          "out_of_range"
+        ]
+      }
+    },
+    {
+      "file": "negative/envelope-non-json-inline.json",
+      "target": "envelope",
+      "expect": {
+        "verdict": "reject",
+        "codes": [
+          "invalid_enum"
+        ]
+      }
+    },
+    {
+      "file": "negative/envelope-blob-with-value.json",
+      "target": "envelope",
+      "expect": {
+        "verdict": "reject",
+        "codes": [
+          "invalid_type"
+        ]
+      }
+    },
+    {
+      "file": "negative/envelope-malformed.json",
+      "target": "envelope",
+      "expect": {
+        "verdict": "reject",
+        "codes": [
+          "malformed_json"
+        ]
+      }
+    },
+    {
+      "file": "negative/study-lock-duplicate-condition.json",
+      "target": "study-lock",
+      "expect": {
+        "verdict": "reject",
+        "codes": [
+          "invalid_enum",
+          "duplicate_reference"
+        ]
+      }
+    },
+    {
+      "file": "negative/study-lock-unknown-condition.json",
+      "target": "study-lock",
+      "expect": {
+        "verdict": "reject",
+        "codes": [
+          "invalid_enum"
+        ]
+      }
+    },
+    {
+      "file": "negative/capture-profile-duplicate-point.json",
+      "target": "capture-profile",
+      "expect": {
+        "verdict": "reject",
+        "codes": [
+          "duplicate_reference"
+        ]
+      }
+    }
+  ]
+}
